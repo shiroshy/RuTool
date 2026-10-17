@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(RuTool VERSION 2.0.5 LANGUAGES C CXX)
+project(RuTool VERSION 2.0.6 LANGUAGES C CXX)
 set(RUTOOL_APP_VERSION "${PROJECT_VERSION}" CACHE STRING "Native client release version")
 if(NOT RUTOOL_APP_VERSION MATCHES "^[0-9]+[.][0-9]+[.][0-9]+$")
     message(FATAL_ERROR "RUTOOL_APP_VERSION must be a three-part version")

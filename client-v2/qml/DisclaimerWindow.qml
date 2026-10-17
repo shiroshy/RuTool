@@ -51,7 +51,7 @@ LegacyDialogWindow {
         LegacyButton {
             objectName: "sourceArchiveLink"; x: parent.width - width - 33; y: parent.height - (dialog.mandatory ? 150 : 122)
             width: 160; text: "Исходный код ↗"; link: true; font.pixelSize: 14
-            onClicked: Qt.openUrlExternally("https://github.com/shiroshy/RuTool/releases/download/v2.0.5/RuTool-Installer-OpenSource-2.0.5.zip")
+            onClicked: Qt.openUrlExternally("https://github.com/shiroshy/RuTool")
         }
         LegacyButton {
             objectName: "agreementLink"; x: 33; y: parent.height - (dialog.mandatory ? 150 : 122)

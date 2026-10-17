@@ -1,0 +1,34 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows-debug",
+      "generator": "Ninja",
+      "binaryDir": "$env{LOCALAPPDATA}/RuTool2Builds/Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_PREFIX_PATH": "$env{RUTOOL_QT_ROOT}",
+        "RUTOOL_STATIC_ANALYSIS": "ON",
+        "RUTOOL_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "windows-release",
+      "inherits": "windows-debug",
+      "binaryDir": "$env{LOCALAPPDATA}/RuTool2Builds/Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release"
+    }
+  ]
+}

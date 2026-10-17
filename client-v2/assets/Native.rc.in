@@ -1,0 +1,2 @@
+1 ICON "@CMAKE_CURRENT_SOURCE_DIR@/assets/RuTool.ico"
+1 24 "@CMAKE_CURRENT_SOURCE_DIR@/assets/Native.manifest"

@@ -5,7 +5,7 @@
 изображения сохраняют свои условия. См. `client-v2/LICENSE` и `client-v2/NOTICE`
 
 # Sponsors:
-Nope_39 - оплата хостинга 500р
-AfteraDev - донат 25р
+- Nope_39 - оплата хостинга 500р.
+- AfteraDev - донат 25р.
 
-Поддержать меня: https://boosty.to/shizukax
+> Поддержать меня: https://boosty.to/shizukax

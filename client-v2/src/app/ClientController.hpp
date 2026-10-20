@@ -33,6 +33,7 @@ class ClientController final : public QObject {
     Q_PROPERTY(bool exportingLog READ exportingLog NOTIFY changed)
     Q_PROPERTY(bool checkingAttachments READ checkingAttachments NOTIFY changed)
     Q_PROPERTY(QString faqText READ faqText NOTIFY contentChanged)
+    Q_PROPERTY(QVariantList credits READ credits NOTIFY contentChanged)
     Q_PROPERTY(QString licenseText READ licenseText NOTIFY contentChanged)
     Q_PROPERTY(QString licenseHash READ licenseHash NOTIFY contentChanged)
     Q_PROPERTY(bool canInstall READ canInstall NOTIFY changed)
@@ -73,6 +74,7 @@ public:
     Q_INVOKABLE void refreshServices();
     Q_INVOKABLE void refreshContent();
     const QString& faqText() const { return faqText_; }
+    const QVariantList& credits() const { return credits_; }
     const QString& licenseText() const { return licenseText_; }
     const QString& licenseHash() const { return licenseHash_; }
     Q_INVOKABLE void inspectPackage(const QUrl& url);
@@ -176,6 +178,7 @@ private:
     QString packageStatus_{QStringLiteral("Выберите .rut для проверки структуры")};
     QString packageHash_;
     qint64 contentRevision_{};
+    QVariantList credits_;
     QString faqText_{QStringLiteral("FAQ пока не заполнен. Текст будет опубликован администратором.")};
     QString licenseText_;
     QString licenseHash_;

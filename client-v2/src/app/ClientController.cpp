@@ -13,6 +13,7 @@
 
 ClientController::ClientController(QObject* parent) : QObject(parent), services_(rutool::updatePublicKey(), this) {
     initializeOperationsConnections();
+    credits_ = rutool::defaultCredits();
     QFile license(QStringLiteral(":/assets/License.txt"));
     if (license.open(QIODevice::ReadOnly)) licenseText_ = QString::fromUtf8(license.readAll());
     licenseHash_ = QString::fromLatin1(QCryptographicHash::hash(licenseText_.toUtf8(), QCryptographicHash::Sha256).toHex());
@@ -20,13 +21,13 @@ ClientController::ClientController(QObject* parent) : QObject(parent), services_
     QFile cache(cachePath);
     if (cache.open(QIODevice::ReadOnly) && cache.size() <= 384 * 1024) {
         const auto content = rutool::parseClientContent(cache.readAll());
-        if (content) { contentRevision_ = content->revision; faqText_ = content->faq; }
+        if (content) { contentRevision_ = content->revision; faqText_ = content->faq; credits_ = content->credits; }
     }
     connect(&services_, &rutool::ServiceClient::contentChecked, this, [this, cachePath](bool ok, const QByteArray& json, const QString&) {
         if (!ok) return;
         const auto content = rutool::parseClientContent(json);
         if (!content || content->revision < contentRevision_) return;
-        contentRevision_ = content->revision; faqText_ = content->faq;
+        contentRevision_ = content->revision; faqText_ = content->faq; credits_ = content->credits;
         QDir().mkpath(QFileInfo(cachePath).absolutePath()); QSaveFile cacheFile(cachePath);
         if (cacheFile.open(QIODevice::WriteOnly)) { if (cacheFile.write(json) == json.size()) cacheFile.commit(); else cacheFile.cancelWriting(); }
         emit contentChanged();

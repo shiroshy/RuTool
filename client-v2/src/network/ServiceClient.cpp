@@ -69,8 +69,8 @@ void ServiceClient::request(Operation operation) {
         } else if (operation == Operation::Content) {
             const auto content = parseClientContent(*body);
             const bool ok = transport && status == 200 && content.has_value();
-            if (!ok) report(QStringLiteral("Не удалось обновить FAQ и соглашение"));
-            emit contentChecked(ok, ok ? *body : QByteArray{}, ok ? QStringLiteral("FAQ и соглашение обновлены") : QStringLiteral("Используется сохранённое соглашение"));
+            if (!ok) report(QStringLiteral("Не удалось обновить тексты и Credits"));
+            emit contentChecked(ok, ok ? *body : QByteArray{}, ok ? QStringLiteral("Тексты и Credits обновлены") : QStringLiteral("Используется сохранённое содержимое"));
         } else {
             if (transport && status == 204) { emit releaseChecked(true, {}, QStringLiteral("Анонс обновления отсутствует")); return; }
             if (!transport || status != 200) { report(QStringLiteral("Не удалось получить анонс")); emit releaseChecked(false, {}, QStringLiteral("Не удалось получить анонс (HTTP %1)").arg(status)); return; }

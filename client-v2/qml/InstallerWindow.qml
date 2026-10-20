@@ -49,7 +49,7 @@ ApplicationWindow {
         onAccepted: { window.statusOverride = ""; client.inspectPackage(selectedFile) }
     }
     FolderDialog { id: gamePicker; title: "Выберите папку Blue Archive"; onAccepted: client.chooseGameFolder(selectedFolder) }
-    CreditsWindow { id: credits; transientParent: window }
+    CreditsWindow { id: credits; transientParent: window; entries: client.credits; onOpenedChanged: if (opened) client.refreshContent() }
     DisclaimerWindow { id: disclaimer; transientParent: window; onAgreementRequested: license.show(); onConsentGiven: uiState.acceptAgreement(client.licenseHash) }
     TextContentPanel { id: faq; objectName: "faqPanel"; transientParent: window; heading: "FAQ"; body: client.faqText }
     TextContentPanel { id: license; objectName: "licensePanel"; transientParent: window; heading: "Лицензия Apache-2.0"; body: client.licenseText; z: 60 }

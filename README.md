@@ -6,6 +6,7 @@
 
 # Sponsors:
 - Nope_39 - оплата хостинга 500р.
+- Herstin _ - оплата хостинга 500р.
 - AfteraDev - донат 25р.
 
 > Поддержать меня: https://boosty.to/shizukax

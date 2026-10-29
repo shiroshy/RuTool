@@ -8,9 +8,6 @@ int main() {
         require(count == 3 && std::wstring(args[1]) == L"--plan", "Expected update plan");
         const auto plan = readJson(args[2]); auto root = fs::absolute(utf8(plan.at("Root"))).lexically_normal(); root.make_preferred();
         waitForParent(plan, root);
-        const auto mutex = CreateMutexW(nullptr, TRUE, (L"Local\\RuToolLiteUpdate-" + std::to_wstring(std::hash<std::wstring>{}(root.wstring()))).c_str());
-        require(mutex != nullptr, "Update lock unavailable"); struct Mutex { HANDLE h; ~Mutex() { ReleaseMutex(h); CloseHandle(h); } } locked{mutex};
-        require(GetLastError() != ERROR_ALREADY_EXISTS, "Another update is running");
         HANDLE lease = INVALID_HANDLE_VALUE;
         {
             const auto cache = fs::path(args[2]).parent_path(); safe(cache);

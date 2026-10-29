@@ -6,13 +6,14 @@
 namespace rutool {
 class InstallerApi final {
 public:
-    explicit InstallerApi(Cancellation cancel = {});
+    explicit InstallerApi(Cancellation cancel = {}, QNetworkAccessManager* transport = nullptr);
     Result<QJsonObject> get(const QString& endpoint);
     Result<QJsonObject> post(const QString& endpoint, const QJsonObject& object);
     Result<bool> verifyPackage(const PreparedPackage& package);
 private:
     Result<QJsonObject> json(const QString& endpoint, const QByteArray& body, bool post);
-    QNetworkAccessManager manager_;
+    QNetworkAccessManager ownedManager_;
+    QNetworkAccessManager* manager_;
     Cancellation cancel_;
 };
 QJsonValue apiValue(const QJsonObject& object, const QString& name);

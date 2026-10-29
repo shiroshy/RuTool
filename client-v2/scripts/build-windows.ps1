@@ -5,16 +5,25 @@ param(
     [string]$Cppcheck,
     [string]$BuildDirectory,
     [string]$InstallDirectory,
-    [string]$Version = '2.0.7',
+    [string]$Version = '2.0.8',
     [switch]$WithTests,
     [switch]$Benchmarks
 )
 $ErrorActionPreference = 'Stop'
 $taskSource = Split-Path $PSScriptRoot -Parent
 $taskWorkspace = Split-Path $taskSource -Parent
-if (!$SdkRoot) { $SdkRoot = Join-Path $taskWorkspace 'work/rutool2-sdk' }
-if (!$ToolingRoot) { $ToolingRoot = Join-Path $taskWorkspace 'work/rutool2-tooling' }
-if (!$Cppcheck) { $Cppcheck = Join-Path $env:LOCALAPPDATA 'RuTool2Toolchain/cppcheck-2.22.0/cppcheck.exe' }
+if (!$SdkRoot) {
+    $SdkRoot = Join-Path $taskWorkspace 'work/rutool2-sdk'
+    if (!(Test-Path -LiteralPath $SdkRoot)) { $SdkRoot = Join-Path $env:LOCALAPPDATA 'RuTool2Toolchain/sdk' }
+}
+if (!$ToolingRoot) {
+    $ToolingRoot = Join-Path $taskWorkspace 'work/rutool2-tooling'
+    if (!(Test-Path -LiteralPath $ToolingRoot)) { $ToolingRoot = Join-Path $env:LOCALAPPDATA 'RuTool2Toolchain/python-tools' }
+}
+if (!$Cppcheck) {
+    $Cppcheck = Join-Path $env:LOCALAPPDATA 'RuTool2Toolchain/cppcheck-2.22.0/cppcheck.exe'
+    if (!(Test-Path -LiteralPath $Cppcheck)) { $Cppcheck = Join-Path $env:LOCALAPPDATA 'RuTool2Toolchain/cppcheck-build/bin/cppcheck.exe' }
+}
 if (!$BuildDirectory) { $BuildDirectory = Join-Path $env:LOCALAPPDATA "RuTool2Builds/$Configuration" }
 $taskQt = Join-Path $SdkRoot '6.8.3/mingw_64'
 $taskCompiler = Join-Path $SdkRoot 'Tools/mingw1310_64/bin'

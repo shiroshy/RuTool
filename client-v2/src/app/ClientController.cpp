@@ -13,6 +13,7 @@
 
 ClientController::ClientController(QObject* parent) : QObject(parent), services_(rutool::updatePublicKey(), this) {
     initializeOperationsConnections();
+    initializePremiumConnections();
     credits_ = rutool::defaultCredits();
     QFile license(QStringLiteral(":/assets/License.txt"));
     if (license.open(QIODevice::ReadOnly)) licenseText_ = QString::fromUtf8(license.readAll());
@@ -67,9 +68,10 @@ ClientController::ClientController(QObject* parent) : QObject(parent), services_
     });
 }
 ClientController::~ClientController() {
-    lifetime_->store(true); if (cancel_) cancel_->store(true); services_.cancel(); cooldownTimer_.stop();
+    lifetime_->store(true); if (cancel_) cancel_->store(true); services_.cancel(); cooldownTimer_.stop(); premiumTimer_.stop();
     watcher_.waitForFinished(); exportWatcher_.waitForFinished(); attachmentWatcher_.waitForFinished(); workWatcher_.waitForFinished();
     catalogWatcher_.waitForFinished(); countWatcher_.waitForFinished(); restoreWatcher_.waitForFinished(); reportWatcher_.waitForFinished(); updateWatcher_.waitForFinished();
+    premiumWatcher_.waitForFinished(); premiumCatalogWatcher_.waitForFinished();
     cacheCleanup_.waitForFinished();
 }
 void ClientController::refreshServices() {
@@ -91,6 +93,7 @@ void ClientController::inspectPackage(const QUrl& url) {
     cancel_ = std::make_shared<std::atomic_bool>(false); const auto cancellation = cancel_;
     emit changed();
     if (operationalStarted_) {
+        operationalSettings_.remove(QStringLiteral("PendingTransferPath")); operationalSettings_.remove(QStringLiteral("PendingTransferSha256"));
         const auto keysPath = rutool::installerConfigPath(QStringLiteral("installer-keys.json"));
         static const QRegularExpression downloadedName(QStringLiteral("^[0-9a-f]{32}[.]rut$"));
         const bool owned = operationalSettings_.value(QStringLiteral("PendingDownloadedPackage")).toBool() && QDir::fromNativeSeparators(operationalSettings_.value(QStringLiteral("PackagePath")).toString()) == QDir::fromNativeSeparators(path) && downloadedName.match(QFileInfo(path).fileName()).hasMatch() && QFileInfo(path).absolutePath().compare(QDir(dataRoot_).filePath(QStringLiteral("TranslationDownloads")), Qt::CaseInsensitive) == 0;
@@ -121,12 +124,22 @@ QString ClientController::gameState() const {
     return gameValid_ ? QStringLiteral("✓  Папка выбрана") : gameFolder_.isEmpty() ? QStringLiteral("Папка не выбрана") : QStringLiteral("Проверьте папку");
 }
 void ClientController::setGameFolder(const QString& path) {
-    if (busy_ || gameFolder_ == path) return;
-    gameFolder_ = path;
-    const QFileInfo database(QDir(path.trimmed()).filePath(
+    const auto normalized = path.trimmed().isEmpty() ? QString{} : QDir::toNativeSeparators(QDir::cleanPath(path.trimmed()));
+    if (busy_ || gameFolder_ == normalized) return;
+    if (operationalStarted_ && !gameFolder_.isEmpty()) saveOperations();
+    const auto oldSettingsGame = operationalSettings_.value(QStringLiteral("GameFolder")).toString();
+    gameFolder_ = normalized;
+    if (operationalStarted_) {
+        const auto key = QDir::fromNativeSeparators(QFileInfo(gameFolder_).absoluteFilePath()).toCaseFolded();
+        const auto backups = operationalSettings_.value(QStringLiteral("GameBackups")).toObject();
+        backupPath_ = backups.contains(key) ? backups.value(key).toString() :
+            !oldSettingsGame.isEmpty() && QFileInfo(oldSettingsGame).absoluteFilePath().compare(QFileInfo(gameFolder_).absoluteFilePath(), Qt::CaseInsensitive) == 0
+            ? operationalSettings_.value(QStringLiteral("BackupPath")).toString() : QString{};
+    }
+    const QFileInfo database(QDir(gameFolder_).filePath(
         QStringLiteral("BlueArchive_Data/StreamingAssets/PUB/Resource/Preload/TableBundles/ExcelDB.db")));
-    gameValid_ = !path.trimmed().isEmpty() && database.isFile() && database.isReadable();
-    if (!gameValid_ && !path.trimmed().isEmpty()) logError(QStringLiteral("GameFolder"), QStringLiteral("MISSING_DATABASE"), QStringLiteral("Ожидаемая база игры не найдена в выбранном каталоге"));
+    gameValid_ = !gameFolder_.isEmpty() && database.isFile() && database.isReadable();
+    if (!gameValid_ && !gameFolder_.isEmpty()) logError(QStringLiteral("GameFolder"), QStringLiteral("MISSING_DATABASE"), QStringLiteral("Ожидаемая база игры не найдена в выбранном каталоге"));
     if (operationalStarted_) { saveOperations(); refreshRestore(); }
     emit changed();
 }
@@ -158,21 +171,7 @@ void ClientController::checkReportAttachments(const QList<QUrl>& urls) {
     if (checkingAttachments()) return;
     attachmentUrls_ = urls;
     attachmentWatcher_.setFuture(QtConcurrent::run([urls] {
-        if (urls.size() > 10) return QStringLiteral("Можно приложить не более 10 файлов.");
-        const QStringList allowed{QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("webp"),
-            QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("txt")};
-        constexpr qint64 limit = 8 * 1024 * 1024;
-        qint64 total{};
-        for (const auto& url : urls) {
-            const QFileInfo file(url.toLocalFile());
-            if (!url.isLocalFile() || !file.isFile() || !file.isReadable())
-                return QStringLiteral("Выберите доступные локальные файлы для вложений.");
-            if (!allowed.contains(file.suffix().toLower())) return QStringLiteral("Можно приложить изображения и TXT-логи.");
-            const auto bytes = file.size();
-            if (bytes < 0 || bytes > limit - total) return QStringLiteral("Общий размер вложений не должен превышать 8 МБ.");
-            total += bytes;
-        }
-        return QString{};
+        const auto valid = rutool::validateReportAttachments(urls); return valid ? QString{} : valid.error().message;
     }));
     emit changed();
 }

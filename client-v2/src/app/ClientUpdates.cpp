@@ -22,7 +22,7 @@ void ClientController::checkApplicationUpdate(bool candidate) {
         if (object->isEmpty()) return UpdateInfo{};
         const auto envelope = QJsonDocument(*object).toJson(QJsonDocument::Compact); auto release = rutool::verifyApplicationEnvelope(envelope, key);
         if (!release) return std::unexpected(release.error());
-        if (!release->version.startsWith(QStringLiteral("2.")) || QVersionNumber::fromString(release->version) <= QVersionNumber::fromString(QStringLiteral(RUTOOL_APP_VERSION))) return UpdateInfo{};
+        if (QVersionNumber::fromString(release->version) <= QVersionNumber::fromString(QStringLiteral(RUTOOL_APP_VERSION))) return UpdateInfo{};
         return UpdateInfo{*release, envelope};
     }));
 }
@@ -38,11 +38,14 @@ void ClientController::runApplicationUpdate() {
     busy_ = true; cancellable_ = true; operationStatus_ = QStringLiteral("Готовим обновление программы…"); emit changed();
     workWatcher_.setFuture(QtConcurrent::run([this, release, envelope, root, cache, cancellation]() -> rutool::Result<Work> {
         if (QVersionNumber::fromString(release.version) <= QVersionNumber::fromString(QStringLiteral(RUTOOL_APP_VERSION))) return std::unexpected(updateError(QStringLiteral("Обновление устарело.")));
+        quint64 required{}; for (const auto& file : release.files) required += static_cast<quint64>(file.bytes);
+        auto space = rutool::platform::requireFreeSpace({{cache, required + 4 * 1024 * 1024}}); if (!space) return std::unexpected(space.error());
         const auto stage = QDir(cache).filePath(QStringLiteral("stage")); if (!QDir().mkpath(stage)) return std::unexpected(updateError(QStringLiteral("Не удалось создать каталог обновления.")));
         auto cacheLease = rutool::platform::FileLock::directoryLease(cache); if (!cacheLease) return std::unexpected(cacheLease.error());
         auto started = rutool::platform::currentProcessStartedTicks(); if (!started) return std::unexpected(started.error());
         const QJsonObject owner{{QStringLiteral("ProcessId"), QCoreApplication::applicationPid()}, {QStringLiteral("ProcessStartedUtcTicks"), *started}};
         if (!save(QDir(cache).filePath(QStringLiteral("owner.json")), QJsonDocument(owner).toJson(QJsonDocument::Compact))) return std::unexpected(updateError(QStringLiteral("Не удалось сохранить владельца загрузки.")));
+        QNetworkAccessManager transfers;
         for (const auto& file : release.files) {
             if (cancellation->load()) return std::unexpected(rutool::Error{rutool::ErrorCode::Cancelled, QStringLiteral("Обновление отменено.")});
             const auto source = QDir(root).filePath(file.path), destination = QDir(stage).filePath(file.path); QDir().mkpath(QFileInfo(destination).absolutePath());
@@ -51,7 +54,7 @@ void ClientController::runApplicationUpdate() {
             else {
                 QMetaObject::invokeMethod(this, [this, file] { operationStatus_ = QStringLiteral("Скачиваем обновление: %1").arg(file.path); emit changed(); }, Qt::QueuedConnection);
                 const auto url = QUrl(QStringLiteral("https://bluehalo.site/api/installer/application/assets/") + file.asset);
-                auto downloaded = rutool::downloadAsset(url, file.bytes, file.sha256, destination, cancellation); if (!downloaded) return std::unexpected(downloaded.error());
+                auto downloaded = rutool::downloadAsset(url, file.bytes, file.sha256, destination, cancellation, {}, &transfers); if (!downloaded) return std::unexpected(downloaded.error());
             }
             auto hash = rutool::hashFile(destination, cancellation); if (!hash || *hash != file.sha256) return std::unexpected(updateError(QStringLiteral("Проверка подготовленного файла обновления не прошла.")));
         }

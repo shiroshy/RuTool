@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <stdexcept>
 #include <cstring>
+#include <memory>
+#include "UpdateLock.hpp"
 
 int main() {
     try {
@@ -15,15 +17,19 @@ int main() {
         wchar_t executable[32768]{}; const auto length = GetModuleFileNameW(nullptr, executable, 32768);
         if (!length || length >= 32768) throw std::runtime_error("Executable path unavailable");
         const auto root = std::filesystem::path(executable).parent_path();
+        auto startupLock = std::make_unique<UpdateLock>(root);
         if (std::filesystem::exists(root / L".rutool-lite-update")) {
+            startupLock.reset();
             wchar_t temporary[32768]{}; if (!GetTempPathW(32768, temporary)) throw std::runtime_error("Temporary folder unavailable");
             const auto helper = std::filesystem::path(temporary) / (L"RuToolLiteRecover-" + std::to_wstring(GetCurrentProcessId()) + L".exe");
             if (!CopyFileW((root / L"updater/RuToolUpdater.exe").c_str(), helper.c_str(), FALSE)) throw std::runtime_error("Cannot prepare update recovery");
             std::wstring command = L"\"" + helper.wstring() + L"\" --recover-only \"" + root.wstring() + L"\"";
             STARTUPINFOW startup{}; startup.cb = sizeof(startup); PROCESS_INFORMATION process{};
             if (!CreateProcessW(helper.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, root.c_str(), &startup, &process)) throw std::runtime_error("Cannot start update recovery");
-            WaitForSingleObject(process.hProcess, INFINITE); DWORD code{}; GetExitCodeProcess(process.hProcess, &code); CloseHandle(process.hProcess); CloseHandle(process.hThread); DeleteFileW(helper.c_str());
+            const auto waited = WaitForSingleObject(process.hProcess, 300000); DWORD code{}; GetExitCodeProcess(process.hProcess, &code); CloseHandle(process.hProcess); CloseHandle(process.hThread); DeleteFileW(helper.c_str());
+            if (waited != WAIT_OBJECT_0) throw std::runtime_error("Recovery is still running; wait before starting RuTool again");
             if (code) throw std::runtime_error("Update recovery failed; keep the update journal for recovery");
+            startupLock = std::make_unique<UpdateLock>(root);
         }
         if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS)) throw std::runtime_error("Secure DLL search unavailable");
         const auto app = root / L"app"; auto directory = AddDllDirectory(app.c_str());
@@ -36,6 +42,7 @@ int main() {
         using Entry = int (*)(int, char**); const auto address = GetProcAddress(module, "rutoolMain");
         if (!address) throw std::runtime_error("Native entry point unavailable");
         static_assert(sizeof(Entry) == sizeof(address)); Entry entry{}; std::memcpy(&entry, &address, sizeof(entry));
+        startupLock.reset();
         std::vector<std::string> utf8; std::vector<char*> argv;
         for (int i = 0; i < count; ++i) {
             const auto length = WideCharToMultiByte(CP_UTF8, 0, arguments[i], -1, nullptr, 0, nullptr, nullptr);

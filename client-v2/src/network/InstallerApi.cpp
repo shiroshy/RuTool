@@ -19,13 +19,14 @@ QJsonValue apiValue(const QJsonObject& object, const QString& name) {
     if (object.contains(name)) return object.value(name);
     auto lower = name; lower[0] = lower[0].toLower(); return object.value(lower);
 }
-InstallerApi::InstallerApi(Cancellation cancel) : cancel_(std::move(cancel)) {}
+InstallerApi::InstallerApi(Cancellation cancel, QNetworkAccessManager* transport) : manager_(transport ? transport : &ownedManager_), cancel_(std::move(cancel)) {}
 Result<QJsonObject> InstallerApi::get(const QString& endpoint) { return json(endpoint, {}, false); }
 Result<QJsonObject> InstallerApi::post(const QString& endpoint, const QJsonObject& object) { return json(endpoint, QJsonDocument(object).toJson(QJsonDocument::Compact), true); }
 Result<QJsonObject> InstallerApi::json(const QString& endpoint, const QByteArray& body, bool posting) {
     if (QThread::currentThread() == QCoreApplication::instance()->thread())
         return std::unexpected(networkError(QStringLiteral("Сетевую операцию нужно выполнять в рабочем потоке.")));
     const QStringList allowed{QStringLiteral("api/verify"), QStringLiteral("api/installer/releases/latest"),
+        QStringLiteral("api/installer/premium/check"), QStringLiteral("api/installer/premium/releases"),
         QStringLiteral("api/installer/installations"), QStringLiteral("api/installer/application/latest"), QStringLiteral("api/installer/application/candidate")};
     if (!allowed.contains(endpoint) || body.size() > 16 * 1024) return std::unexpected(networkError(QStringLiteral("Недопустимый запрос API.")));
     if (cancel_ && cancel_->load()) return std::unexpected(Error{ErrorCode::Cancelled, QStringLiteral("Операция отменена.")});
@@ -33,7 +34,7 @@ Result<QJsonObject> InstallerApi::json(const QString& endpoint, const QByteArray
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     request.setTransferTimeout(15000);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    auto* reply = posting ? manager_.post(request, body) : manager_.get(request);
+    auto* reply = posting ? manager_->post(request, body) : manager_->get(request);
     QEventLoop loop; QTimer deadline, cancellation; QByteArray bytes; bool oversized{}, timedOut{};
     deadline.setSingleShot(true);
     QObject::connect(&deadline, &QTimer::timeout, &loop, [&] { timedOut = true; reply->abort(); });
@@ -48,6 +49,8 @@ Result<QJsonObject> InstallerApi::json(const QString& endpoint, const QByteArray
     const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const auto error = reply->error(); delete reply;
     if (cancel_ && cancel_->load()) return std::unexpected(Error{ErrorCode::Cancelled, QStringLiteral("Операция отменена.")});
+    if ((status == 401 || status == 403) && endpoint.startsWith(QStringLiteral("api/installer/premium/")))
+        return std::unexpected(Error{ErrorCode::AccessDenied, QStringLiteral("Код бусти не дает доступ к Premium.")});
     if (status == 403) return std::unexpected(networkError(QStringLiteral("Сервер отклонил запрос (HTTP 403).")));
     if (error != QNetworkReply::NoError || status < 200 || status >= 300 || oversized || timedOut)
         return std::unexpected(networkError(QStringLiteral("Сервер недоступен или вернул некорректный ответ (HTTP %1).").arg(status)));

@@ -5,7 +5,7 @@
 #include <expected>
 
 namespace rutool {
-enum class ErrorCode { InvalidInput, UnsupportedFormat, Truncated, Io, Cancelled, Signature, Network };
+enum class ErrorCode { InvalidInput, UnsupportedFormat, Truncated, Io, Cancelled, Signature, Network, AccessDenied };
 struct Error { ErrorCode code{ErrorCode::InvalidInput}; QString message; QString details{}; };
 template<class T> using Result = std::expected<T, Error>;
 bool isHash(const QString& value);

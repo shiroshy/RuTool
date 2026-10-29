@@ -2,12 +2,15 @@
 #include <rutool/core/RutProtocol.hpp>
 #include <memory>
 #include <QStringList>
+#include <vector>
+#include <utility>
 
 namespace rutool::platform {
 Result<void> requireGameClosed();
 Result<void> requireSafeFile(const QString& path);
 Result<void> requireSafeDirectory(const QString& path);
 Result<void> flushFile(const QString& path);
+Result<void> requireFreeSpace(const std::vector<std::pair<QString, quint64>>& writes);
 Result<void> replaceFile(const QString& staged, const QString& target);
 Result<qint64> currentProcessStartedTicks();
 Result<qint64> launchHidden(const QString& program, const QStringList& arguments, const QString& workingDirectory);

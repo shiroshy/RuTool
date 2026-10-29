@@ -2,6 +2,9 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QProcess>
+#include <QStorageInfo>
+#include <QMap>
+#include <limits>
 #include <windows.h>
 #include <tlhelp32.h>
 
@@ -49,6 +52,27 @@ Result<void> flushFile(const QString& path) {
     const auto native = QDir::toNativeSeparators(path);
     Handle file{CreateFileW(wide(native), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
     if (file.value == INVALID_HANDLE_VALUE || !FlushFileBuffers(file.value)) return std::unexpected(io(QStringLiteral("Не удалось надёжно записать файл на диск.")));
+    return {};
+}
+Result<void> requireFreeSpace(const std::vector<std::pair<QString, quint64>>& writes) {
+    QMap<QByteArray, std::pair<QStorageInfo, quint64>> volumes;
+    for (const auto& [path, bytes] : writes) {
+        auto parent = QFileInfo(path).absoluteFilePath();
+        while (!QFileInfo::exists(parent)) { const auto next = QFileInfo(parent).absolutePath(); if (next == parent) break; parent = next; }
+        QStorageInfo storage(parent);
+        if (!storage.isValid() || !storage.isReady() || storage.bytesAvailable() < 0)
+            return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Не удалось проверить свободное место на диске."), parent});
+        auto& volume = volumes[storage.device()]; volume.first = storage;
+        if (bytes > std::numeric_limits<quint64>::max() - volume.second) return std::unexpected(io(QStringLiteral("Некорректный размер файлов.")));
+        volume.second += bytes;
+    }
+    for (const auto& volume : volumes) {
+        constexpr quint64 reserve = 64ULL * 1024 * 1024;
+        const auto available = static_cast<quint64>(volume.first.bytesAvailable());
+        if (available < reserve || volume.second > available - reserve)
+            return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Недостаточно свободного места на диске %1. Требуется ещё %2 МБ с запасом.")
+                .arg(volume.first.rootPath()).arg(volume.second / (1024 * 1024) + 64)});
+    }
     return {};
 }
 Result<void> replaceFile(const QString& staged, const QString& target) {

@@ -21,5 +21,6 @@ Result<std::vector<QString>> installationHashes(const QString& game, bool bundle
 Result<InstallationResult> installPackage(const InstallationRequest& request, const CommitGuard& guard, const Cancellation& cancel = {});
 Result<void> restoreOriginal(const QString& game, const QString& backup, const Cancellation& cancel = {});
 Result<std::vector<FileReplacement>> originalReceipt(const QString& game, const QString& backup, const Cancellation& cancel = {});
+Result<QString> findOriginalBackup(const QString& game, const QString& backupRoot, const Cancellation& cancel = {});
 Result<std::optional<QString>> recoverInstallation(const QString& game);
 }

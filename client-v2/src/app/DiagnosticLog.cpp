@@ -10,6 +10,8 @@ QString DiagnosticLog::sanitize(QString text) {
     text.replace(QDir::toNativeSeparators(QDir::homePath()), QStringLiteral("<USER>"), Qt::CaseInsensitive);
     static const QRegularExpression secrets(QStringLiteral(R"((?i)(bearer\s+|(?:token|password|memberKey|secret|authorization)\s*[:=]\s*)[^\s,;]+)"));
     text.replace(secrets, QStringLiteral("\\1<REDACTED>"));
+    static const QRegularExpression boosty(QStringLiteral(R"((?i)\bBST(?:-?[A-HJ-NP-Z2-9]{8}){4}\b)"));
+    text.replace(boosty, QStringLiteral("<BOOSTY_REDACTED>"));
     text.replace(QChar(0), QChar(0xfffd));
     return text.left(16384);
 }

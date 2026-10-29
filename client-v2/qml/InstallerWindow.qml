@@ -60,7 +60,8 @@ ApplicationWindow {
         }
     }
     ReportWindow { id: report; transientParent: window; onExportLogRequested: window.saveErrorLog(true) }
-    TranslationsWindow { id: translations; transientParent: window; primaryRelease: client.primaryRelease.id ? client.primaryRelease : null; onManualRequested: packagePicker.open(); onDownloadRequested: { translations.close(); client.downloadTranslation() } }
+    TranslationsWindow { id: translations; transientParent: window; primaryRelease: client.primaryRelease.id ? client.primaryRelease : null; releases: client.premiumReleases; onManualRequested: packagePicker.open(); onDownloadRequested: function(releaseId) { translations.close(); client.downloadTranslation(releaseId) }; onCodeRequested: { translations.close(); boostyDialog.show() } }
+    BoostyWindow { id: boostyDialog; transientParent: window }
     ConfirmationWindow { id: confirmation; transientParent: window; z: 65 }
     Component.onCompleted: {
         uiState.restoreWindow(window)
@@ -72,7 +73,7 @@ ApplicationWindow {
 
     Item {
         id: mainContent; anchors.fill: parent
-        enabled: !disclaimer.visible && !report.visible && !credits.visible && !translations.visible && !faq.visible && !license.visible && !confirmation.visible
+        enabled: !disclaimer.visible && !report.visible && !credits.visible && !translations.visible && !boostyDialog.visible && !faq.visible && !license.visible && !confirmation.visible
     ThemedBackground { objectName: "mainBackground"; anchors.fill: parent; anchors.margins: 1 }
     Rectangle {
         anchors.fill: parent; anchors.margins: 1
@@ -86,6 +87,7 @@ ApplicationWindow {
             onDoubleClicked: window.visibility = window.visibility === Window.Maximized ? Window.Windowed : Window.Maximized
         }
         Shape {
+            objectName: "headerPlate"
             x: 0; y: 31; width: 714; height: 66
             preferredRendererType: Shape.CurveRenderer
             ShapePath { strokeWidth: 0; strokeColor: "transparent"; fillColor: Theme.color("#dfffffff"); PathSvg { path: "M0,0 L680,0 714,66 0,66 Z" } }
@@ -112,7 +114,30 @@ ApplicationWindow {
             Item { width: 20; height: 1 }
             Rectangle { width: 1; height: 22; color: Theme.color("#90adce"); opacity: 0.65; y: 20 }
             Item { width: 20; height: 1 }
-            LegacyText { text: "Установок: " + client.installationCount; font.pixelSize: 13; color: Theme.color("#4e6998"); y: 22 }
+            LegacyText {
+                id: installationsLabel; text: "Установок: " + client.installationCount; font.pixelSize: 13; color: Theme.color("#4e6998"); y: 22
+                width: Math.min(implicitWidth, 110); elide: Text.ElideRight
+                HoverHandler { id: installationsHover }
+                ToolTip.visible: installationsHover.hovered && installationsLabel.truncated
+                ToolTip.text: installationsLabel.text
+            }
+            Item { width: 18; height: 1 }
+            Item {
+                width: boostyControl.implicitWidth; height: 60
+                LegacyButton {
+                    id: boostyControl
+                    objectName: "boostyButton"; y: 12; width: parent.width; height: 32; font.pixelSize: 13
+                    leftPadding: 12; rightPadding: 12
+                    text: "Код бусти"; enabled: !window.working; hint: client.premiumStatus
+                    onClicked: boostyDialog.show()
+                    Accessible.name: "Код бусти"
+                }
+                LegacyText {
+                    objectName: "boostyHeaderStatus"; y: 46; width: parent.width; font.pixelSize: 11; elide: Text.ElideRight
+                    text: client.checkingPremium ? "Проверяем…" : client.premiumActive ? "Активен" : client.boostyCode.length ? "Код не активен" : ""
+                    color: client.premiumActive ? Theme.color("#159d50") : Theme.color("#637faa")
+                }
+            }
         }
         Row {
             anchors.right: parent.right; anchors.rightMargin: 10; y: 4
@@ -125,7 +150,7 @@ ApplicationWindow {
             enabled: !window.working
             text: "Обновить до " + (client.applicationUpdateVersion || "2.0.0"); font.pixelSize: 13; leftPadding: 12; rightPadding: 12; topPadding: 5; bottomPadding: 5
             onClicked: client.requestApplicationUpdate()
-            anchors.right: parent.right; anchors.rightMargin: 24; anchors.bottom: parent.bottom; anchors.bottomMargin: 15
+            anchors.right: parent.right; anchors.rightMargin: 156; anchors.top: parent.top; anchors.topMargin: 4
         }
     }
     Flickable {
@@ -183,7 +208,7 @@ ApplicationWindow {
                     LegacyButton {
                         objectName: "serverPackage"; width: 162; height: 41; anchors.right: parent.right; anchors.bottom: parent.bottom
                         text: "Скачать перевод"; primary: true; font.pixelSize: 14
-                        enabled: !window.working; onClicked: { client.loadCatalog(); translations.show() }
+                        enabled: !window.working; onClicked: { client.loadCatalog(); client.loadPremiumCatalog(); translations.show() }
                     }
                 }
             }
@@ -281,7 +306,8 @@ ApplicationWindow {
         Row {
             visible: window.working; x: footerLinks.x - 170; anchors.verticalCenter: parent.verticalCenter; spacing: 12
             ProgressBar { width: 72; height: 4; indeterminate: true; anchors.verticalCenter: parent.verticalCenter }
-            LegacyButton { text: "Отменить"; font.pixelSize: 13; leftPadding: 12; rightPadding: 12; topPadding: 5; bottomPadding: 5; onClicked: client.cancel() }
+            LegacyButton { text: "Отменить"; visible: client.canCancel; font.pixelSize: 13; leftPadding: 12; rightPadding: 12; topPadding: 5; bottomPadding: 5; onClicked: client.cancel() }
+            LegacyText { visible: !client.canCancel; width: 82; text: "Записываем файлы…"; wrapMode: Text.WordWrap; font.pixelSize: 11; color: Theme.muted }
         }
         Row {
             id: footerLinks; anchors.right: parent.right; anchors.rightMargin: 25; anchors.verticalCenter: parent.verticalCenter

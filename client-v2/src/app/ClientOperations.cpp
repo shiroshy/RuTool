@@ -24,6 +24,10 @@ void ClientController::initializeOperationsConnections() {
         const bool downloaded = packageWork && (packageDownloading() || (packagePath_.isEmpty() && !packageName_.isEmpty()));
         packagePhase_ = PackagePhase::Idle;
         if (!result) {
+            if (result.error().code == rutool::ErrorCode::AccessDenied) {
+                premiumAccepted_ = false; premiumValidThrough_ = {}; premiumStatus_ = result.error().message;
+                operationalSettings_.remove(QStringLiteral("BoostyCodeProtected")); saveOperations();
+            }
             packageError_ = result.error().code != rutool::ErrorCode::Cancelled; operationStatus_ = result.error().message;
             if (packageWork) {
                 packageStatus_ = result.error().message; packageHash_.clear();
@@ -32,6 +36,7 @@ void ClientController::initializeOperationsConnections() {
                     selectedDownloadLease_.reset();
                     operationalSettings_[QStringLiteral("PackagePath")] = QString{};
                     operationalSettings_[QStringLiteral("PendingDownloadedPackage")] = false;
+                    operationalSettings_.remove(QStringLiteral("PendingTransferPath")); operationalSettings_.remove(QStringLiteral("PendingTransferSha256"));
                     saveOperations();
                 }
                 cleanDownloads(packagePath_);
@@ -49,6 +54,7 @@ void ClientController::initializeOperationsConnections() {
                 session_ = result->session; packagePath_ = QDir::toNativeSeparators(session_->package.source); packageHash_ = session_->package.sourceHash; packageStatus_ = session_->trustDetail; packageError_ = false;
                 operationalSettings_[QStringLiteral("PackagePath")] = session_->package.source;
                 operationalSettings_[QStringLiteral("PendingDownloadedPackage")] = session_->ownedDownload;
+                operationalSettings_.remove(QStringLiteral("PendingTransferPath")); operationalSettings_.remove(QStringLiteral("PendingTransferSha256"));
                 if (latestTranslation_ && session_->package.sourceHash == latestTranslation_->sha256) operationalSettings_[QStringLiteral("LatestTranslationSequence")] = latestTranslation_->sequence;
                 saveOperations();
             }
@@ -141,20 +147,27 @@ void ClientController::start(const QString& isolatedDataRoot) {
     if (!uuidN.match(operationalSettings_.value(QStringLiteral("ReportClientId")).toString()).hasMatch()) operationalSettings_[QStringLiteral("ReportClientId")] = QUuid::createUuid().toString(QUuid::Id128);
     setGameFolder(operationalSettings_.value(QStringLiteral("GameFolder")).toString()); refreshRestore(); saveOperations();
     if (!busy_ && QFileInfo::exists(selectedDownload)) inspectPackage(QUrl::fromLocalFile(selectedDownload));
-    cooldownTimer_.start(1000); loadCatalog(); refreshCount(); checkApplicationUpdate(); emit changed();
+    cooldownTimer_.start(1000); loadCatalog(); startPremium(); refreshCount(); checkApplicationUpdate(); emit changed();
 }
 void ClientController::cleanDownloads(const QString& preservedPath) {
     if (dataRoot_.isEmpty()) return;
     auto previous = cacheCleanup_;
-    cacheCleanup_ = QtConcurrent::run([previous, root = dataRoot_, preservedPath]() mutable {
+    const auto preserved = preservedPath.isEmpty() ? operationalSettings_.value(QStringLiteral("PendingTransferPath")).toString() : preservedPath;
+    cacheCleanup_ = QtConcurrent::run([previous, root = dataRoot_, preserved]() mutable {
         previous.waitForFinished();
-        cleanupTranslationDownloads(root, preservedPath);
+        cleanupTranslationDownloads(root, preserved);
         cleanupAbandonedUpdates(root);
     });
 }
 void ClientController::saveOperations() {
     if (!operationalStarted_ || dataRoot_.isEmpty()) return;
     operationalSettings_[QStringLiteral("GameFolder")] = gameFolder_; QDir().mkpath(dataRoot_);
+    operationalSettings_[QStringLiteral("BackupPath")] = backupPath_;
+    if (!gameFolder_.isEmpty() && (gameValid_ || !backupPath_.isEmpty())) {
+        auto backups = operationalSettings_.value(QStringLiteral("GameBackups")).toObject();
+        backups[QDir::fromNativeSeparators(QFileInfo(gameFolder_).absoluteFilePath()).toCaseFolded()] = backupPath_;
+        operationalSettings_[QStringLiteral("GameBackups")] = backups;
+    }
     QSaveFile file(QDir(dataRoot_).filePath(QStringLiteral("client-v2-settings.json"))); const auto bytes = QJsonDocument(operationalSettings_).toJson(QJsonDocument::Compact);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) logError(QStringLiteral("Settings"), QStringLiteral("IO"), QStringLiteral("Не удалось сохранить настройки нового клиента."), file.errorString());
 }
@@ -173,12 +186,16 @@ void ClientController::refreshCount() {
 }
 void ClientController::refreshRestore() {
     if (restoreWatcher_.isRunning()) { restoreAgain_ = true; restoreAvailable_ = false; return; }
-    const auto game = gameFolder_, backup = backupPath_; const auto cancel = lifetime_; restoreAvailable_ = false;
-    restoreWatcher_.setFuture(QtConcurrent::run([game, backup, cancel]() -> rutool::Result<RestoreWork> {
+    const auto game = gameFolder_, backup = backupPath_, backupRoot = QDir(dataRoot_).filePath(QStringLiteral("Backups")); const auto cancel = lifetime_; restoreAvailable_ = false;
+    restoreWatcher_.setFuture(QtConcurrent::run([game, backup, backupRoot, cancel]() -> rutool::Result<RestoreWork> {
         if (game.isEmpty()) return RestoreWork{};
         auto recovered = rutool::recoverInstallation(game); if (!recovered) return std::unexpected(recovered.error());
-        const auto selected = recovered->has_value() ? **recovered : backup;
-        return RestoreWork{!selected.isEmpty() && rutool::originalReceipt(game, selected, cancel).has_value(), *recovered};
+        auto selected = recovered->has_value() ? **recovered : backup;
+        if (selected.isEmpty() || !rutool::originalReceipt(game, selected, cancel)) {
+            auto discovered = rutool::findOriginalBackup(game, backupRoot, cancel); if (!discovered) return std::unexpected(discovered.error());
+            selected = *discovered;
+        }
+        return RestoreWork{!selected.isEmpty(), std::optional<QString>{selected}};
     }));
 }
 void ClientController::loadCatalog() {
@@ -189,49 +206,68 @@ void ClientController::loadCatalog() {
         return rutool::parseTranslationRelease(*response, minimum);
     }));
 }
-rutool::Result<std::shared_ptr<ClientController::Session>> ClientController::prepare(const QString& path, const QString& keysPath, const rutool::Cancellation& cancel) {
-    auto framing = rutool::inspectRut(path, cancel); if (!framing) return std::unexpected(framing.error());
+rutool::Result<std::shared_ptr<ClientController::Session>> ClientController::prepare(const QString& path, const QString& keysPath, const rutool::Cancellation& cancel, rutool::InstallerApi* transport) {
     auto password = rutool::readPackagePassword(keysPath); if (!password) return std::unexpected(password.error());
-    rutool::InstallerApi api(cancel);
+    rutool::InstallerApi defaultApi(cancel); auto& api = transport ? *transport : defaultApi;
     auto session = std::make_shared<Session>(); session->staging = std::make_shared<QTemporaryDir>();
     if (!session->staging->isValid()) return std::unexpected(failure(QStringLiteral("Не удалось создать временный каталог пакета.")));
     auto package = rutool::decryptPackage(path, session->staging->path(), *password, cancel); if (!package) return std::unexpected(package.error());
-    if (package->sourceHash != framing->sha256) return std::unexpected(failure(QStringLiteral("Пакет изменился во время чтения.")));
     session->package = *package; auto verified = api.verifyPackage(*package); session->official = verified && *verified;
+    if (!verified && verified.error().code == rutool::ErrorCode::Cancelled) return std::unexpected(verified.error());
     auto latest = api.get(QStringLiteral("api/installer/releases/latest"));
+    if (!latest && latest.error().code == rutool::ErrorCode::Cancelled) return std::unexpected(latest.error());
     if (latest) {
         auto publication = rutool::parseTranslationRelease(*latest, 0);
         if (publication && publication->originalHash == package->originalHash && (!package->bundle || session->official)) {
             auto trusted = api.post(QStringLiteral("api/verify"), publication->attestation);
+            if (!trusted && trusted.error().code == rutool::ErrorCode::Cancelled) return std::unexpected(trusted.error());
             session->originalVerified = trusted && rutool::apiValue(*trusted, QStringLiteral("Valid")).toBool();
         }
     }
     session->trustDetail = session->official ? QStringLiteral("Официальный перевод команды · %1").arg(package->signature.value(QStringLiteral("SignerId")).toString()) : package->signature.isEmpty() ? QStringLiteral("Пакет без подписи команды") : QStringLiteral("Подпись не подтверждена сервером");
+    if (cancel && cancel->load()) return std::unexpected(rutool::Error{rutool::ErrorCode::Cancelled, QStringLiteral("Проверка пакета отменена.")});
     return session;
 }
-void ClientController::downloadTranslation() {
-    if (busy_ || !latestTranslation_) return;
+void ClientController::downloadTranslation(const QString& releaseId) {
+    if (busy_) return;
+    std::optional<rutool::TranslationRelease> selectedRelease;
+    if (releaseId == QStringLiteral("main")) { if (premiumMainAvailable()) selectedRelease = premiumMain_; }
+    else if (releaseId.isEmpty() || (latestTranslation_ && releaseId == latestTranslation_->id)) selectedRelease = latestTranslation_;
+    else for (const auto& candidate : premiumTranslations_) if (candidate.id == releaseId) { selectedRelease = candidate; break; }
+    if (!selectedRelease) return;
+    const auto release = *selectedRelease;
+    if (release.premium && !premiumActive()) { operationStatus_ = QStringLiteral("Для тестового перевода введите действующий код бусти."); emit changed(); return; }
+    const auto premiumCode = release.premium ? boostyCode_.toUtf8() : QByteArray{};
+    const auto pending = operationalSettings_.value(QStringLiteral("PendingTransferPath")).toString();
+    const bool resumable = isTranslationDownload(dataRoot_, pending) && operationalSettings_.value(QStringLiteral("PendingTransferSha256")).toString() == release.sha256;
     if (session_) session_->downloadLease.reset();
     session_.reset(); selectedDownloadLease_.reset(); confirmationToken_.clear(); packageError_ = false; packageHash_.clear(); packagePath_.clear();
     operationalSettings_[QStringLiteral("PackagePath")] = QString{};
     operationalSettings_[QStringLiteral("PendingDownloadedPackage")] = false;
-    saveOperations(); cleanDownloads();
-    const auto release = *latestTranslation_; const auto keysPath = rutool::installerConfigPath(QStringLiteral("installer-keys.json"));
-    const auto cache = QDir(dataRoot_).filePath(QStringLiteral("TranslationDownloads")); const auto path = QDir(cache).filePath(QUuid::createUuid().toString(QUuid::Id128) + QStringLiteral(".rut"));
+    const auto keysPath = rutool::installerConfigPath(QStringLiteral("installer-keys.json"));
+    const auto cache = QDir(dataRoot_).filePath(QStringLiteral("TranslationDownloads")); const auto path = resumable ? pending : QDir(cache).filePath(QUuid::createUuid().toString(QUuid::Id128) + QStringLiteral(".rut"));
+    operationalSettings_[QStringLiteral("PendingTransferPath")] = path; operationalSettings_[QStringLiteral("PendingTransferSha256")] = release.sha256;
+    saveOperations(); cleanDownloads(path);
     busy_ = true; cancellable_ = true; cancel_ = std::make_shared<std::atomic_bool>(false); const auto cancellation = cancel_;
-    packageName_ = QStringLiteral("Blue Archive · %1").arg(release.version);
+    packageName_ = release.premium ? release.name + QStringLiteral(" · Premium") : QStringLiteral("Blue Archive · %1").arg(release.version);
     packagePhase_ = PackagePhase::Downloading;
     packageStatus_ = QStringLiteral("Проверка целостности и подписи начнётся после завершения скачивания.");
     operationStatus_ = QStringLiteral("Скачиваем перевод…"); emit changed();
-    workWatcher_.setFuture(QtConcurrent::run([this, release, keysPath, path, cancellation]() -> rutool::Result<Work> {
+    workWatcher_.setFuture(QtConcurrent::run([this, release, keysPath, path, cancellation, premiumCode]() -> rutool::Result<Work> {
         auto password = rutool::readPackagePassword(keysPath); if (!password) return std::unexpected(password.error());
         rutool::InstallerApi api(cancellation);
+        if (release.premium) {
+            auto status = api.post(QStringLiteral("api/installer/premium/check"), {{QStringLiteral("Code"), QString::fromUtf8(premiumCode)}});
+            if (!status) return std::unexpected(status.error());
+            auto access = rutool::parsePremiumStatus(*status);
+            if (!access || !access->valid) return std::unexpected(rutool::Error{rutool::ErrorCode::AccessDenied, QStringLiteral("Код бусти истек или отозван. Premium-загрузка недоступна.")});
+        }
         if (!release.attestation.isEmpty()) { auto verified = api.post(QStringLiteral("api/verify"), release.attestation); if (!verified || !rutool::apiValue(*verified, QStringLiteral("Valid")).toBool()) return std::unexpected(failure(QStringLiteral("Подпись публикации .rut не подтверждена."))); }
         if (!QDir().mkpath(QFileInfo(path).absolutePath())) return std::unexpected(failure(QStringLiteral("Не удалось создать кэш загрузок.")));
         auto lease = rutool::platform::FileLock::cacheEntry(path); if (!lease) return std::unexpected(lease.error());
         auto downloaded = rutool::downloadAsset(release.url, release.bytes, release.sha256, path, cancellation, [this](qint64 done, qint64 total) {
             QMetaObject::invokeMethod(this, [this, done, total] { operationStatus_ = QStringLiteral("Скачиваем перевод: %1 / %2 МБ").arg(done / (1024 * 1024)).arg(total / (1024 * 1024)); emit changed(); }, Qt::QueuedConnection);
-        });
+        }, nullptr, premiumCode);
         if (!downloaded) return std::unexpected(downloaded.error());
         QMetaObject::invokeMethod(this, [this, cancellation] {
             if (cancel_ != cancellation || !busy_ || !packageDownloading()) return;
@@ -239,8 +275,11 @@ void ClientController::downloadTranslation() {
             operationStatus_ = QStringLiteral("Проверяем скачанный перевод…"); emit changed();
         }, Qt::QueuedConnection);
         auto selected = prepare(*downloaded, keysPath, cancellation);
-        if (!selected || !(*selected)->official || (*selected)->package.originalHash != release.originalHash) { QFile::remove(path); return std::unexpected(selected ? failure(QStringLiteral("Скачанный перевод не прошёл проверку подписи или исходной версии.")) : selected.error()); }
+        if (!selected) { QFile::remove(path); return std::unexpected(selected.error()); }
+        if (!(*selected)->official) { QFile::remove(path); return std::unexpected(rutool::Error{rutool::ErrorCode::Signature,QStringLiteral("Сервер не подтвердил подпись скачанного перевода. Повторите проверку при доступном сервере.")}); }
+        if ((*selected)->package.originalHash != release.originalHash) { QFile::remove(path); return std::unexpected(rutool::Error{rutool::ErrorCode::Signature,QStringLiteral("Хеш исходной БД в каталоге не совпадает с описанием скачанного перевода."),QStringLiteral("CatalogOriginal=%1; PackageOriginal=%2").arg(release.originalHash,(*selected)->package.originalHash)}); }
         (*selected)->ownedDownload = true;
+        if (release.premium) (*selected)->originalVerified = true;
         (*selected)->downloadLease = std::move(*lease);
         return Work{*selected, QStringLiteral("Перевод проверен. Нажмите «Установить перевод»."), {}, false, false, {}};
     }));
@@ -250,6 +289,12 @@ void ClientController::askConfirmation(int action, const QString& heading, const
 }
 void ClientController::installTranslation() {
     if (!canInstall()) return;
+    if (!session_->originalVerified && !restoreAvailable_) {
+        askConfirmation(1, QStringLiteral("Локальное восстановление недоступно"),
+            QStringLiteral("Исходные файлы этого пакета не подтверждены. Постоянная копия оригинала не будет создана; для возврата файлов потребуется проверка Steam. Продолжить установку?") +
+            (session_->official ? QString{} : QStringLiteral("\nПодлинность перевода также не подтверждена.")));
+        return;
+    }
     if (!session_->official) { askConfirmation(1, QStringLiteral("Непроверенный перевод"), QStringLiteral("Подлинность этого перевода не подтверждена. При установке неподписанного или повреждённого пакета возможны проблемы. Всё равно установить?")); return; }
     runInstall(false);
 }

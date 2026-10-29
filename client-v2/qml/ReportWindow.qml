@@ -46,7 +46,7 @@ LegacyDialogWindow {
             contentWidth: width; contentHeight: form.height; clip: true; boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: LegacyScrollBar { anchors.right: formScroll.right }
             Item {
-            id: form; width: formScroll.width - 16; height: Math.max(629, formScroll.height)
+            id: form; objectName: "reportForm"; enabled: !client.sendingReport; width: formScroll.width - 16; height: Math.max(629, formScroll.height)
             LegacyText { text: "Расскажите, что случилось"; font.pixelSize: 22; font.bold: true }
             LegacyText { y: 34; width: parent.width; text: "Опишите ошибку и при необходимости приложите скриншоты."; font.pixelSize: 14; color: Theme.color("#637fa4"); wrapMode: Text.WordWrap }
             LegacyText { y: 69; text: "Выберите тему"; font.pixelSize: 14; font.weight: Font.DemiBold }
@@ -62,7 +62,7 @@ LegacyDialogWindow {
                 popup: Popup { y: topic.height; width: topic.width; padding: 2; implicitHeight: Math.min(contentItem.implicitHeight + 4, 250); contentItem: ListView { clip: true; implicitHeight: contentHeight; model: topic.popup.visible ? topic.delegateModel : null; currentIndex: topic.highlightedIndex; ScrollIndicator.vertical: ScrollIndicator {} } background: Rectangle { radius: 6; color: Theme.color("#f7fcff"); border.color: Theme.color("#9bc6eb") } }
             }
             LegacyText { y: 153; text: "Текст сообщения"; font.pixelSize: 14; font.weight: Font.DemiBold }
-            LegacyText { y: 153; anchors.right: parent.right; text: message.length + " / 400"; color: Theme.color("#6582aa"); font.pixelSize: 14 }
+            LegacyText { y: 153; anchors.right: parent.right; text: Copy.codePointLength(message.text) + " / 400"; color: Theme.color("#6582aa"); font.pixelSize: 14 }
             ScrollView {
                 id: messageScroll; objectName: "reportMessageScroll"
                 y: 180; width: parent.width; height: 128
@@ -75,12 +75,12 @@ LegacyDialogWindow {
                     width: messageScroll.width
                     padding: 12; rightPadding: 24; wrapMode: TextEdit.Wrap; selectByMouse: true
                     text: ""
-                    onTextChanged: if (length > 400) remove(400, length)
+                    onTextChanged: if (Copy.codePointLength(text) > 400) text = Copy.limitCodePoints(text, 400)
                     background: null
                 }
             }
             LegacyText { y: 325; text: "Контакт для ответа"; font.pixelSize: 14; font.weight: Font.DemiBold }
-            LegacyField { id: contact; y: 352; width: parent.width; height: 40; maximumLength: 64; placeholderText: "Желательно ваш тг юз"; font.pixelSize: 15; background: Rectangle { color: Theme.color("#dff8fcff"); border.color: Theme.color("#a9c9e9") } }
+            LegacyField { id: contact; y: 352; width: parent.width; height: 40; maximumLength: 128; onTextEdited: if (Copy.codePointLength(text) > 64) text = Copy.limitCodePoints(text, 64); placeholderText: "Желательно ваш тг юз"; font.pixelSize: 15; background: Rectangle { color: Theme.color("#dff8fcff"); border.color: Theme.color("#a9c9e9") } }
             LegacyText { y: 421; text: "Вложения"; font.pixelSize: 14; font.weight: Font.DemiBold }
             LegacyButton { y: 412; x: parent.width - 290; text: "+ Лог ошибки"; font.pixelSize: 14; height: 37; leftPadding: 12; rightPadding: 12; enabled: !client.exportingLog && !client.checkingAttachments; onClicked: dialog.exportLogRequested() }
             LegacyButton { y: 412; anchors.right: parent.right; text: "+ Добавить файлы"; font.pixelSize: 14; height: 37; leftPadding: 14; rightPadding: 14; enabled: !client.checkingAttachments; surfaceFirst: Theme.color("#f8ffffff"); surfaceLast: Theme.color("#eef1f9ff"); normalEdge: Theme.color("#9bc6eb"); onClicked: files.open() }

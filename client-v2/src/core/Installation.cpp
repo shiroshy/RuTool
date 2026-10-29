@@ -37,7 +37,7 @@ Result<void> writeObject(const QString& path, const QJsonObject& object) {
     QSaveFile output(path); const auto bytes = QJsonDocument(object).toJson(QJsonDocument::Compact);
     if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() || !output.commit())
         return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Не удалось сохранить описание оригинальной копии."), output.errorString()});
-    return {};
+    return platform::flushFile(path);
 }
 Result<void> exactHash(const QString& path, const QString& expected, const Cancellation& cancel) {
     auto actual = hashFile(path, cancel);
@@ -105,6 +105,12 @@ Result<QString> replace(std::vector<FileReplacement> files, const QString& backu
             }
         }
     } cleanup{staged, backups, committed, preserveRecovery, retainOriginal};
+    std::vector<std::pair<QString, quint64>> required;
+    for (const auto& item : files) {
+        required.emplace_back(item.target, static_cast<quint64>(QFileInfo(item.source).size()));
+        required.emplace_back(retainOriginal ? backupRoot : item.target, static_cast<quint64>(QFileInfo(item.target).size()));
+    }
+    auto space = platform::requireFreeSpace(required); if (!space) return std::unexpected(space.error());
     for (auto& item : files) {
         const auto stage = item.target + QStringLiteral(".baretool-install-") + id + QStringLiteral(".tmp");
         item.backup = retainOriginal ? QDir(backupRoot).filePath(QFileInfo(item.target).fileName() + QStringLiteral(".baretool-backup-") + id + QStringLiteral(".db"))
@@ -160,6 +166,11 @@ Result<QString> replace(std::vector<FileReplacement> files, const QString& backu
     if (!result) {
         preserveRecovery = true;
         for (size_t i = installed; i > 0; --i) {
+            const auto& item = files[i - 1];
+            auto current = hashFile(item.target); auto allowed = sidecars(item.target);
+            if (!current || !allowed || (*current != item.before && *current != item.after))
+                return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Файл изменён другой программой после замены. Автоматический откат остановлен; журнал и копии сохранены."), result.error().message});
+            if (*current == item.before) continue;
             QFile::remove(staged[i - 1]);
             if (!QFile::copy(backups[i - 1], staged[i - 1])) return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Откат не завершён. Копии восстановления сохранены."), result.error().message});
             auto rolledBack = platform::replaceFile(staged[i - 1], files[i - 1].target);
@@ -291,6 +302,19 @@ Result<void> restoreOriginal(const QString& game, const QString& backup, const C
     if (!restored) return std::unexpected(restored.error());
     return {};
 }
+Result<QString> findOriginalBackup(const QString& game, const QString& backupRoot, const Cancellation& cancel) {
+    if (!QFileInfo::exists(backupRoot)) return QString{};
+    auto safe = platform::requireSafeDirectory(backupRoot); if (!safe) return std::unexpected(safe.error());
+    const QDir directory(backupRoot);
+    for (const auto& entry : directory.entryInfoList({QStringLiteral("*.baretool-backup.json")}, QDir::Files, QDir::Time)) {
+        if (cancel && cancel->load()) return std::unexpected(Error{ErrorCode::Cancelled, QStringLiteral("Поиск исходной копии отменён.")});
+        auto object = readObject(entry.absoluteFilePath());
+        if (!object || !samePath(object->value(QStringLiteral("TargetPath")).toString(), gameDatabasePath(game))) continue;
+        auto backup = entry.absoluteFilePath(); backup.chop(QStringLiteral(".baretool-backup.json").size());
+        if (originalReceipt(game, backup, cancel)) return backup;
+    }
+    return QString{};
+}
 Result<InstallationResult> installPackage(const InstallationRequest& request, const CommitGuard& guard, const Cancellation& cancel) {
     auto valid = validatePreparedPackage(request.package.folder, cancel);
         if (!valid) return std::unexpected(valid.error());
@@ -306,8 +330,10 @@ Result<InstallationResult> installPackage(const InstallationRequest& request, co
         originals.push_back(valid->bundleHashes[3]); originals.push_back(valid->bundleHashes[4]);
         patched.push_back(valid->bundleHashes[1]); patched.push_back(valid->bundleHashes[2]);
         sources.push_back(QDir(valid->folder).filePath(QStringLiteral("Excel.zip"))); sources.push_back(QDir(valid->folder).filePath(QStringLiteral("resources.assets")));
-        for (size_t i = 0; i < sources.size(); ++i) if (QFileInfo(sources[i]).size() != QFileInfo(paths[i]).size()) return std::unexpected(invalid(QStringLiteral("Размер файла общего пакета отличается от исходного.")));
     }
+    for (size_t i = 0; i < sources.size(); ++i)
+        if (QFileInfo(sources[i]).size() <= 0 || QFileInfo(sources[i]).size() != QFileInfo(paths[i]).size())
+            return std::unexpected(invalid(QStringLiteral("Пустой файл или размер перевода отличается от файла выбранной игры. Используйте пакет для этой версии игры.")));
     if (*actual == patched) return InstallationResult{request.previousOriginal, true};
     const bool forced = !request.approvedBefore.empty();
     if ((!forced && *actual != originals) || (forced && (request.approvedBefore != *actual || request.approvedAfter != valid->patchedHash)))
@@ -315,17 +341,20 @@ Result<InstallationResult> installPackage(const InstallationRequest& request, co
     std::vector<FileReplacement> items;
     for (size_t i = 0; i < paths.size(); ++i) items.push_back({paths[i], sources[i], (*actual)[i], patched[i], {}});
     auto previous = originalReceipt(request.game, request.previousOriginal, cancel);
-    bool keepPrevious = forced && previous && previous->size() == paths.size();
+    if (forced && previous && previous->size() < paths.size())
+        return std::unexpected(invalid(QStringLiteral("Перед переходом с базы на общий пакет восстановите исходные файлы игры. Исходная копия сохранена.")));
+    bool keepPrevious = forced && previous && previous->size() >= paths.size();
     if (keepPrevious) for (size_t i = 0; i < paths.size(); ++i) if ((*previous)[i].after != originals[i]) keepPrevious = false;
     CommitGuard finalize;
     QJsonArray oldReceipts;
     if (keepPrevious) {
         std::vector<FileReplacement> updated;
-        for (size_t i = 0; i < paths.size(); ++i) updated.push_back({paths[i], {}, originals[i], patched[i], (*previous)[i].source});
+        for (size_t i = 0; i < previous->size(); ++i)
+            updated.push_back({(*previous)[i].target, {}, (*previous)[i].after, i < patched.size() ? patched[i] : (*previous)[i].before, (*previous)[i].source});
         const auto databasePath = request.previousOriginal + QStringLiteral(".baretool-backup.json"), bundlePath = request.previousOriginal + QStringLiteral(".rut-bundle.json");
         auto oldDatabase = readObject(databasePath); if (!oldDatabase) return std::unexpected(oldDatabase.error());
         oldReceipts.append(QJsonObject{{QStringLiteral("Path"), databasePath}, {QStringLiteral("Object"), *oldDatabase}});
-        if (paths.size() == 3) { auto oldBundle = readObject(bundlePath); if (!oldBundle) return std::unexpected(oldBundle.error()); oldReceipts.append(QJsonObject{{QStringLiteral("Path"), bundlePath}, {QStringLiteral("Object"), *oldBundle}}); }
+        if (updated.size() == 3) { auto oldBundle = readObject(bundlePath); if (!oldBundle) return std::unexpected(oldBundle.error()); oldReceipts.append(QJsonObject{{QStringLiteral("Path"), bundlePath}, {QStringLiteral("Object"), *oldBundle}}); }
         finalize = [updated, databasePath, bundlePath, old = *oldDatabase]() -> Result<void> {
             auto saved = writeObject(databasePath, databaseReceipt(updated[0], true)); if (!saved) return std::unexpected(saved.error());
             if (updated.size() == 3) {

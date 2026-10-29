@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <limits>
 #include <zlib.h>
+#include <rutool/platform/FileOps.hpp>
 
 namespace rutool {
 namespace {
@@ -109,6 +110,7 @@ Result<void> extractPackageZip(const QString& path, const QString& folder, const
         previousEnd = entry.end;
     }
     if (previousEnd != centralOffset) return std::unexpected(bad(QStringLiteral("Повреждённые границы ZIP.")));
+    auto space = platform::requireFreeSpace({{folder, total}}); if (!space) return std::unexpected(space.error());
     for (const auto& entry : entries) {
         if (cancelled(cancel)) return std::unexpected(Error{ErrorCode::Cancelled, QStringLiteral("Распаковка отменена.")});
         QFile output(destination.filePath(QString::fromLatin1(entry.name)));
@@ -193,8 +195,7 @@ Result<PreparedPackage> validatePreparedPackage(const QString& folder, const Can
     return result;
 }
 Result<PreparedPackage> decryptPackage(const QString& source, const QString& folder, const platform::Secret& password, const Cancellation& cancel) {
-    auto originalHash = hashFile(source, cancel);
-    if (!originalHash) return std::unexpected(originalHash.error());
+    auto sourceLock = platform::FileLock::read(source); if (!sourceLock) return std::unexpected(sourceLock.error());
     QFile input(source);
     if (!input.open(QIODevice::ReadOnly)) return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Пакет недоступен.")});
     const auto header = input.read(32);
@@ -202,6 +203,8 @@ Result<PreparedPackage> decryptPackage(const QString& source, const QString& fol
     auto key = platform::deriveRutKey(password, header.mid(8, 16));
     if (!key) return std::unexpected(key.error());
     const auto zipPath = folder + QStringLiteral(".decrypted.zip");
+    auto space = platform::requireFreeSpace({{zipPath, static_cast<quint64>(input.size())}}); if (!space) return std::unexpected(space.error());
+    QCryptographicHash sourceHash(QCryptographicHash::Sha256); sourceHash.addData(header);
     struct Cleanup { QString path; ~Cleanup() { QFile::remove(path); } } cleanup{zipPath};
     QFile output(zipPath);
     if (!output.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Временный ZIP недоступен.")});
@@ -214,6 +217,7 @@ Result<PreparedPackage> decryptPackage(const QString& source, const QString& fol
         if (!count || count > 1024 * 1024) return std::unexpected(bad(QStringLiteral("Некорректный размер блока .rut.")));
         const auto cipher = input.read(count), tag = input.read(16);
         if (cipher.size() != count || tag.size() != 16) return std::unexpected(bad(QStringLiteral("Обрезанный блок .rut.")));
+        sourceHash.addData(word); sourceHash.addData(cipher); sourceHash.addData(tag);
         total += count;
         if (total > 3ULL * 1024 * 1024 * 1024) return std::unexpected(bad(QStringLiteral("Пакет слишком велик.")));
         auto plain = platform::decryptGcm(*key, chunkNonce(header.mid(24, 8), static_cast<quint32>(index)), cipher, tag, chunkAad(static_cast<quint32>(index)));
@@ -227,10 +231,8 @@ Result<PreparedPackage> decryptPackage(const QString& source, const QString& fol
     if (!extracted) return std::unexpected(extracted.error());
     auto prepared = validatePreparedPackage(folder, cancel);
     if (!prepared) return std::unexpected(prepared.error());
-    auto after = hashFile(source, cancel);
-    if (!after) return std::unexpected(after.error());
-    if (*after != *originalHash) return std::unexpected(bad(QStringLiteral("Пакет изменился во время чтения.")));
-    prepared->source = source; prepared->sourceHash = *originalHash;
+    if (cancelled(cancel)) return std::unexpected(Error{ErrorCode::Cancelled, QStringLiteral("Чтение .rut отменено.")});
+    prepared->source = source; prepared->sourceHash = QString::fromLatin1(sourceHash.result().toHex());
     return prepared;
 }
 }

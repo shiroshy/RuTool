@@ -21,7 +21,7 @@ void cleanupTranslationDownloads(const QString& dataRoot, const QString& preserv
         const auto match = name.match(entry.fileName()); if (!match.hasMatch()) continue;
         const auto target = QDir(base).filePath(match.captured(1));
         if (!isTranslationDownload(dataRoot, target)) continue;
-        if (entry.fileName() == match.captured(1) && isTranslationDownload(dataRoot, preservedPath)
+        if (isTranslationDownload(dataRoot, preservedPath)
             && QFileInfo(target).absoluteFilePath().compare(QFileInfo(preservedPath).absoluteFilePath(), Qt::CaseInsensitive) == 0) continue;
         auto lease = rutool::platform::FileLock::cacheEntry(target); if (!lease) continue;
         if (rutool::platform::requireSafeFile(entry.absoluteFilePath())) QFile::remove(entry.absoluteFilePath());

@@ -6,6 +6,7 @@
 #include "DiagnosticLog.hpp"
 #include <rutool/core/Installation.hpp>
 #include <rutool/network/Transfers.hpp>
+#include <rutool/network/Premium.hpp>
 #include <rutool/core/InstallerConfig.hpp>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -20,6 +21,7 @@ class ClientController final : public QObject {
     Q_PROPERTY(QString packageStatus READ packageStatus NOTIFY changed)
     Q_PROPERTY(QString packageHash READ packageHash NOTIFY changed)
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(bool canCancel READ canCancel NOTIFY changed)
     Q_PROPERTY(QString packagePath READ packagePath NOTIFY changed)
     Q_PROPERTY(QString packageName READ packageName NOTIFY changed)
     Q_PROPERTY(bool hasPackage READ hasPackage NOTIFY changed)
@@ -40,6 +42,12 @@ class ClientController final : public QObject {
     Q_PROPERTY(bool canRestore READ canRestore NOTIFY changed)
     Q_PROPERTY(QString operationStatus READ operationStatus NOTIFY changed)
     Q_PROPERTY(QVariantMap primaryRelease READ primaryRelease NOTIFY changed)
+    Q_PROPERTY(QString boostyCode READ boostyCode WRITE setBoostyCode NOTIFY changed)
+    Q_PROPERTY(QString premiumStatus READ premiumStatus NOTIFY changed)
+    Q_PROPERTY(bool checkingPremium READ checkingPremium NOTIFY changed)
+    Q_PROPERTY(bool premiumActive READ premiumActive NOTIFY changed)
+    Q_PROPERTY(QVariantList premiumReleases READ premiumReleases NOTIFY changed)
+    Q_PROPERTY(bool premiumMainAvailable READ premiumMainAvailable NOTIFY changed)
     Q_PROPERTY(QString installationCount READ installationCount NOTIFY changed)
     Q_PROPERTY(bool sendingReport READ sendingReport NOTIFY changed)
     Q_PROPERTY(QString reportCooldown READ reportCooldown NOTIFY changed)
@@ -56,6 +64,7 @@ public:
     const QString& packageStatus() const { return packageStatus_; }
     const QString& packageHash() const { return packageHash_; }
     bool busy() const { return busy_; }
+    bool canCancel() const { return busy_ && cancellable_; }
     const QString& packagePath() const { return packagePath_; }
     const QString& packageName() const { return packageName_; }
     bool hasPackage() const { return !packagePath_.isEmpty(); }
@@ -84,7 +93,16 @@ public:
     Q_INVOKABLE void checkReportAttachments(const QList<QUrl>& urls);
     Q_INVOKABLE void start(const QString& isolatedDataRoot = {});
     Q_INVOKABLE void loadCatalog();
-    Q_INVOKABLE void downloadTranslation();
+    Q_INVOKABLE void downloadTranslation(const QString& releaseId = {});
+    const QString& boostyCode() const { return boostyCode_; }
+    void setBoostyCode(const QString& code);
+    const QString& premiumStatus() const { return premiumStatus_; }
+    bool checkingPremium() const { return premiumTimer_.isActive() || premiumWatcher_.isRunning(); }
+    bool premiumActive() const { return premiumAccepted_ && premiumValidThrough_.isValid() && premiumValidThrough_ >= QDateTime::currentDateTimeUtc().date(); }
+    const QVariantList& premiumReleases() const { return premiumReleases_; }
+    bool premiumMainAvailable() const { return premiumMain_ && latestTranslation_ && premiumMain_->sha256 == latestTranslation_->sha256 && premiumMain_->bytes == latestTranslation_->bytes && premiumMain_->originalHash == latestTranslation_->originalHash; }
+    Q_INVOKABLE void loadPremiumCatalog();
+    Q_INVOKABLE void verifyBoostyCode();
     Q_INVOKABLE void installTranslation();
     Q_INVOKABLE void restoreFiles();
     Q_INVOKABLE void confirmAction(const QString& token, bool accepted);
@@ -118,7 +136,9 @@ private:
     struct UpdateInfo { std::optional<rutool::ApplicationRelease> release; QByteArray envelope; };
     struct RestoreWork { bool available{}; std::optional<QString> recoveredBackup; };
     void initializeOperationsConnections();
-    static rutool::Result<std::shared_ptr<Session>> prepare(const QString& path, const QString& keysPath, const rutool::Cancellation& cancel);
+    void initializePremiumConnections();
+    void startPremium();
+    static rutool::Result<std::shared_ptr<Session>> prepare(const QString& path, const QString& keysPath, const rutool::Cancellation& cancel, rutool::InstallerApi* transport = nullptr);
     void runInstall(bool allowUnverified, std::vector<QString> approved = {});
     void runRestore();
     void refreshCount();
@@ -131,6 +151,16 @@ private:
     rutool::Cancellation lifetime_{std::make_shared<std::atomic_bool>(false)};
     QFutureWatcher<rutool::Result<Work>> workWatcher_;
     QFutureWatcher<rutool::Result<rutool::TranslationRelease>> catalogWatcher_;
+    QFutureWatcher<rutool::Result<rutool::PremiumStatus>> premiumWatcher_;
+    QFutureWatcher<rutool::Result<rutool::PremiumCatalogInfo>> premiumCatalogWatcher_;
+    QTimer premiumTimer_;
+    QString boostyCode_, checkingBoostyCode_;
+    QString premiumStatus_{QStringLiteral("Код бусти открывает тестовые переводы Premium.")};
+    bool premiumAccepted_{};
+    QDate premiumValidThrough_;
+    std::vector<rutool::TranslationRelease> premiumTranslations_;
+    std::optional<rutool::TranslationRelease> premiumMain_;
+    QVariantList premiumReleases_;
     QFutureWatcher<rutool::Result<qint64>> countWatcher_;
     QFutureWatcher<rutool::Result<RestoreWork>> restoreWatcher_;
     QFutureWatcher<rutool::Result<rutool::ReportResponse>> reportWatcher_;

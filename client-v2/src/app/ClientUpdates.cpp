@@ -1,3 +1,5 @@
+#include <QtGlobal>
+#ifdef Q_OS_WIN
 #include "ClientController.hpp"
 #include <QCoreApplication>
 #include <QDir>
@@ -75,3 +77,12 @@ void ClientController::runApplicationUpdate() {
         Work result; result.helper = helper; result.plan = plan; result.helperLock = std::shared_ptr<rutool::platform::FileLock>(std::move(*helperLock)); result.cacheLease = std::shared_ptr<rutool::platform::FileLock>(std::move(*cacheLease)); result.status = QStringLiteral("Обновление проверено. Перезапускаем программу…"); return result;
     }));
 }
+
+#else
+#include "ClientController.hpp"
+void ClientController::checkApplicationUpdate(bool) {}
+void ClientController::requestApplicationUpdate() {
+    operationStatus_ = QStringLiteral("Для обновления Linux-версии замените AppImage вручную."); emit changed();
+}
+void ClientController::runApplicationUpdate() { requestApplicationUpdate(); }
+#endif

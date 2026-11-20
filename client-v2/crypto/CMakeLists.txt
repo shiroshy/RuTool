@@ -22,7 +22,7 @@ set_target_properties(rutool_portable_crypto PROPERTIES POSITION_INDEPENDENT_COD
 target_compile_features(rutool_portable_crypto PUBLIC cxx_std_20)
 target_include_directories(rutool_portable_crypto PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(rutool_portable_crypto PUBLIC rutool_mbedcrypto)
-if(BUILD_TESTING)
+if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../tests/support/PortableCryptoTests.cpp")
     add_executable(rutool_portable_crypto_tests ../tests/support/PortableCryptoTests.cpp)
     target_link_libraries(rutool_portable_crypto_tests PRIVATE rutool_portable_crypto)
     target_include_directories(rutool_portable_crypto_tests SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")

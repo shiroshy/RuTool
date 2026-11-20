@@ -1,3 +1,4 @@
+#include <rutool/platform/Runtime.hpp>
 #include "CacheCleanup.hpp"
 #include <rutool/platform/FileOps.hpp>
 #include <QDir>
@@ -11,7 +12,7 @@ bool isTranslationDownload(const QString& dataRoot, const QString& path) {
     static const QRegularExpression name(QStringLiteral("^[0-9a-f]{32}[.]rut$"));
     const auto base = QFileInfo(QDir(dataRoot).filePath(QStringLiteral("TranslationDownloads"))).absoluteFilePath();
     return !path.isEmpty() && name.match(QFileInfo(path).fileName()).hasMatch()
-        && QFileInfo(path).absolutePath().compare(base, Qt::CaseInsensitive) == 0;
+        && QFileInfo(path).absolutePath().compare(base, rutool::platform::pathCaseSensitivity) == 0;
 }
 void cleanupTranslationDownloads(const QString& dataRoot, const QString& preservedPath) {
     const auto base = QDir(dataRoot).filePath(QStringLiteral("TranslationDownloads"));
@@ -22,7 +23,7 @@ void cleanupTranslationDownloads(const QString& dataRoot, const QString& preserv
         const auto target = QDir(base).filePath(match.captured(1));
         if (!isTranslationDownload(dataRoot, target)) continue;
         if (isTranslationDownload(dataRoot, preservedPath)
-            && QFileInfo(target).absoluteFilePath().compare(QFileInfo(preservedPath).absoluteFilePath(), Qt::CaseInsensitive) == 0) continue;
+            && QFileInfo(target).absoluteFilePath().compare(QFileInfo(preservedPath).absoluteFilePath(), rutool::platform::pathCaseSensitivity) == 0) continue;
         auto lease = rutool::platform::FileLock::cacheEntry(target); if (!lease) continue;
         if (rutool::platform::requireSafeFile(entry.absoluteFilePath())) QFile::remove(entry.absoluteFilePath());
     }
@@ -47,7 +48,7 @@ void cleanupAbandonedUpdates(const QString& dataRoot) {
     for (const auto& entry : QDir(base).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
         if (!id.match(entry.fileName()).hasMatch()) continue;
         const auto root = entry.absoluteFilePath();
-        if (QFileInfo(root).absolutePath().compare(QFileInfo(base).absoluteFilePath(), Qt::CaseInsensitive) != 0) continue;
+        if (QFileInfo(root).absolutePath().compare(QFileInfo(base).absoluteFilePath(), rutool::platform::pathCaseSensitivity) != 0) continue;
         auto lease = rutool::platform::FileLock::directoryLease(root); if (!lease) continue;
         QFile owner(QDir(root).filePath(QStringLiteral("owner.json")));
         if (!owner.open(QIODevice::ReadOnly) || owner.size() > 4096) continue;

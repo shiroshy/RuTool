@@ -1,3 +1,4 @@
+#include <rutool/platform/Runtime.hpp>
 #include "ClientController.hpp"
 #include "CacheCleanup.hpp"
 #include <QFile>
@@ -78,7 +79,7 @@ void ClientController::refreshServices() {
     serviceStatus_ = QStringLiteral("Проверяем HTTPS…"); releaseStatus_ = QStringLiteral("Проверяем подпись анонса…");
     emit changed(); services_.checkHealth(); services_.checkApplicationRelease();
 }
-void ClientController::refreshContent() { services_.checkClientContent(); }
+void ClientController::refreshContent() { if (!QCoreApplication::instance()->property("rutoolSmokeTest").toBool()) services_.checkClientContent(); }
 void ClientController::inspectPackage(const QUrl& url) {
     if (busy_) return;
     const auto path = url.toLocalFile();
@@ -96,8 +97,8 @@ void ClientController::inspectPackage(const QUrl& url) {
         operationalSettings_.remove(QStringLiteral("PendingTransferPath")); operationalSettings_.remove(QStringLiteral("PendingTransferSha256"));
         const auto keysPath = rutool::installerConfigPath(QStringLiteral("installer-keys.json"));
         static const QRegularExpression downloadedName(QStringLiteral("^[0-9a-f]{32}[.]rut$"));
-        const bool owned = operationalSettings_.value(QStringLiteral("PendingDownloadedPackage")).toBool() && QDir::fromNativeSeparators(operationalSettings_.value(QStringLiteral("PackagePath")).toString()) == QDir::fromNativeSeparators(path) && downloadedName.match(QFileInfo(path).fileName()).hasMatch() && QFileInfo(path).absolutePath().compare(QDir(dataRoot_).filePath(QStringLiteral("TranslationDownloads")), Qt::CaseInsensitive) == 0;
-        if (QFileInfo(operationalSettings_.value(QStringLiteral("PackagePath")).toString()).absoluteFilePath().compare(QFileInfo(path).absoluteFilePath(), Qt::CaseInsensitive) != 0) selectedDownloadLease_.reset();
+        const bool owned = operationalSettings_.value(QStringLiteral("PendingDownloadedPackage")).toBool() && QDir::fromNativeSeparators(operationalSettings_.value(QStringLiteral("PackagePath")).toString()) == QDir::fromNativeSeparators(path) && downloadedName.match(QFileInfo(path).fileName()).hasMatch() && QFileInfo(path).absolutePath().compare(QDir(dataRoot_).filePath(QStringLiteral("TranslationDownloads")), rutool::platform::pathCaseSensitivity) == 0;
+        if (QFileInfo(operationalSettings_.value(QStringLiteral("PackagePath")).toString()).absoluteFilePath().compare(QFileInfo(path).absoluteFilePath(), rutool::platform::pathCaseSensitivity) != 0) selectedDownloadLease_.reset();
         rutool::Result<void> locked;
         if (isTranslationDownload(dataRoot_, path) && !selectedDownloadLease_) {
             auto lease = rutool::platform::FileLock::cacheEntry(path);
@@ -124,16 +125,22 @@ QString ClientController::gameState() const {
     return gameValid_ ? QStringLiteral("✓  Папка выбрана") : gameFolder_.isEmpty() ? QStringLiteral("Папка не выбрана") : QStringLiteral("Проверьте папку");
 }
 void ClientController::setGameFolder(const QString& path) {
-    const auto normalized = path.trimmed().isEmpty() ? QString{} : QDir::toNativeSeparators(QDir::cleanPath(path.trimmed()));
+    auto normalized = path.trimmed().isEmpty() ? QString{} : QDir::toNativeSeparators(QDir::cleanPath(path.trimmed()));
+#ifdef Q_OS_LINUX
+    if (!normalized.isEmpty()) {
+        const auto canonical = QFileInfo(normalized).canonicalFilePath();
+        if (!canonical.isEmpty()) normalized = canonical;
+    }
+#endif
     if (busy_ || gameFolder_ == normalized) return;
     if (operationalStarted_ && !gameFolder_.isEmpty()) saveOperations();
     const auto oldSettingsGame = operationalSettings_.value(QStringLiteral("GameFolder")).toString();
     gameFolder_ = normalized;
     if (operationalStarted_) {
-        const auto key = QDir::fromNativeSeparators(QFileInfo(gameFolder_).absoluteFilePath()).toCaseFolded();
+        const auto key = rutool::platform::pathKey(QDir::fromNativeSeparators(QFileInfo(gameFolder_).absoluteFilePath()));
         const auto backups = operationalSettings_.value(QStringLiteral("GameBackups")).toObject();
         backupPath_ = backups.contains(key) ? backups.value(key).toString() :
-            !oldSettingsGame.isEmpty() && QFileInfo(oldSettingsGame).absoluteFilePath().compare(QFileInfo(gameFolder_).absoluteFilePath(), Qt::CaseInsensitive) == 0
+            !oldSettingsGame.isEmpty() && QFileInfo(oldSettingsGame).absoluteFilePath().compare(QFileInfo(gameFolder_).absoluteFilePath(), rutool::platform::pathCaseSensitivity) == 0
             ? operationalSettings_.value(QStringLiteral("BackupPath")).toString() : QString{};
     }
     const QFileInfo database(QDir(gameFolder_).filePath(

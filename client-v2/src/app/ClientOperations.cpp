@@ -1,4 +1,5 @@
 #include "ClientController.hpp"
+#include <rutool/platform/Runtime.hpp>
 #include "CacheCleanup.hpp"
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -113,7 +114,7 @@ void ClientController::initializeOperationsConnections() {
     });
 }
 void ClientController::start(const QString& isolatedDataRoot) {
-    if (operationalStarted_) return;
+    if (operationalStarted_ || QCoreApplication::instance()->property("rutoolSmokeTest").toBool()) return;
     operationalStarted_ = true; dataRoot_ = isolatedDataRoot.isEmpty() ? operationalRoot() : QFileInfo(isolatedDataRoot).absoluteFilePath();
     const auto nativeSettings = QDir(dataRoot_).filePath(QStringLiteral("client-v2-settings.json"));
     if (QFileInfo::exists(nativeSettings)) {
@@ -145,7 +146,14 @@ void ClientController::start(const QString& isolatedDataRoot) {
     backupPath_ = operationalSettings_.value(QStringLiteral("BackupPath")).toString();
     static const QRegularExpression uuidN(QStringLiteral("^[0-9a-fA-F]{32}$"));
     if (!uuidN.match(operationalSettings_.value(QStringLiteral("ReportClientId")).toString()).hasMatch()) operationalSettings_[QStringLiteral("ReportClientId")] = QUuid::createUuid().toString(QUuid::Id128);
-    setGameFolder(operationalSettings_.value(QStringLiteral("GameFolder")).toString()); refreshRestore(); saveOperations();
+    auto savedGame = operationalSettings_.value(QStringLiteral("GameFolder")).toString();
+#ifdef Q_OS_LINUX
+    if (savedGame.isEmpty()) {
+        const auto games = rutool::platform::discoverGameInstallations();
+        if (!games.isEmpty()) savedGame = games.first();
+    }
+#endif
+    setGameFolder(savedGame); refreshRestore(); saveOperations();
     if (!busy_ && QFileInfo::exists(selectedDownload)) inspectPackage(QUrl::fromLocalFile(selectedDownload));
     cooldownTimer_.start(1000); loadCatalog(); startPremium(); refreshCount(); checkApplicationUpdate(); emit changed();
 }
@@ -165,7 +173,7 @@ void ClientController::saveOperations() {
     operationalSettings_[QStringLiteral("BackupPath")] = backupPath_;
     if (!gameFolder_.isEmpty() && (gameValid_ || !backupPath_.isEmpty())) {
         auto backups = operationalSettings_.value(QStringLiteral("GameBackups")).toObject();
-        backups[QDir::fromNativeSeparators(QFileInfo(gameFolder_).absoluteFilePath()).toCaseFolded()] = backupPath_;
+        backups[rutool::platform::pathKey(QDir::fromNativeSeparators(QFileInfo(gameFolder_).absoluteFilePath()))] = backupPath_;
         operationalSettings_[QStringLiteral("GameBackups")] = backups;
     }
     QSaveFile file(QDir(dataRoot_).filePath(QStringLiteral("client-v2-settings.json"))); const auto bytes = QJsonDocument(operationalSettings_).toJson(QJsonDocument::Compact);

@@ -19,6 +19,17 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "linux-release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "ON",
+        "RUTOOL_STATIC_ANALYSIS": "OFF",
+        "RUTOOL_WARNINGS_AS_ERRORS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -29,6 +40,10 @@
     {
       "name": "windows-release",
       "configurePreset": "windows-release"
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release"
     }
   ]
 }

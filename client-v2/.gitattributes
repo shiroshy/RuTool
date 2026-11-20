@@ -1,0 +1,2 @@
+# Cryptographic/container fixtures must survive checkout without text conversion.
+tests/linux/fixtures/* binary

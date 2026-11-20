@@ -6,4 +6,6 @@ cmake -S "$source_dir" -B "$build_dir" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DRUTOOL_STATIC_ANALYSIS=OFF \
     -DRUTOOL_WARNINGS_AS_ERRORS=ON "${@:2}"
 cmake --build "$build_dir" --parallel "${RUTOOL_BUILD_JOBS:-4}"
-ctest --test-dir "$build_dir" --output-on-failure
+if grep -q '^BUILD_TESTING:BOOL=ON$' "$build_dir/CMakeCache.txt"; then
+    ctest --test-dir "$build_dir" --output-on-failure --no-tests=error
+fi

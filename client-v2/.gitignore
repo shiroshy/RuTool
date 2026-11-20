@@ -41,5 +41,5 @@ signing.env
 /build-linux*/
 /build-appimage/
 /dist-linux*/
-/dist-appimage/
+/dist-appimage*/
 **/__pycache__/

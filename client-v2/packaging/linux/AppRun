@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+# Remove host Qt module paths (especially NixOS wrapper variables) to avoid ABI mixing.
+unset QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH QML_IMPORT_PATH QML2_IMPORT_PATH QT_QUICK_CONTROLS_CONF
+export QT_PLUGIN_PATH="$app_dir/usr/plugins"
+export QML_IMPORT_PATH="$app_dir/usr/qml"
+export QML2_IMPORT_PATH="$app_dir/usr/qml"
+export LD_LIBRARY_PATH="$app_dir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Trust the host's CA policy; an AppImage must not ship a frozen certificate store.
+if [ -z "${SSL_CERT_FILE:-}" ]; then
+    for ca_file in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+        if [ -r "$ca_file" ]; then export SSL_CERT_FILE="$ca_file"; break; fi
+    done
+fi
+exec "$app_dir/usr/bin/RuTool" "$@"

@@ -37,3 +37,9 @@ signing.env
 /third_party/mbedtls-3.6.7/library/*
 !/third_party/mbedtls-3.6.7/library/*.c
 !/third_party/mbedtls-3.6.7/library/*.h
+
+/build-linux*/
+/build-appimage/
+/dist-linux*/
+/dist-appimage/
+**/__pycache__/

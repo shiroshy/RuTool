@@ -1,0 +1,5 @@
+config/installer-keys.json
+build*/
+dist*/
+.git/
+**/__pycache__/

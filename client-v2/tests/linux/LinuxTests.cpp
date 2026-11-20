@@ -4,12 +4,14 @@
 #include <QJsonArray>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QScopeGuard>
 #include <QCryptographicHash>
 #include <rutool/platform/Runtime.hpp>
 #include <rutool/platform/FileOps.hpp>
 #include <rutool/platform/Crypto.hpp>
 #include <rutool/security/Signatures.hpp>
 #include <rutool/core/Installation.hpp>
+#include <rutool/core/InstallerConfig.hpp>
 #include <rutool/network/Transfers.hpp>
 #include <rutool/network/ServiceClient.hpp>
 #include "PortableCrypto.hpp"
@@ -93,6 +95,32 @@ protected:
 class LinuxTests : public QObject {
     Q_OBJECT
 private slots:
+    void installerConfiguration() {
+        QTemporaryDir temp; QVERIFY(temp.isValid());
+        const auto previous = qgetenv("XDG_CONFIG_HOME");
+        const auto restore = qScopeGuard([&] {
+            if (previous.isNull()) qunsetenv("XDG_CONFIG_HOME");
+            else qputenv("XDG_CONFIG_HOME", previous);
+        });
+        qputenv("XDG_CONFIG_HOME", temp.path().toUtf8());
+        const auto name = QStringLiteral("installer-keys.json");
+        const auto bundled = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("app/config/") + name);
+        QCOMPARE(installerConfigPath(name), bundled);
+        QVERIFY(readPackagePassword(bundled));
+        const auto overridePath = QDir(temp.path()).filePath(QStringLiteral("rutool/") + name);
+        QVERIFY(write(overridePath, "{\"FormatVersion\":1,\"RutPassword\":\"test-only-password\"}"));
+        QCOMPARE(installerConfigPath(name), overridePath);
+        auto password = readPackagePassword(installerConfigPath(name));
+        QVERIFY(password); QCOMPARE(password->bytes(), QByteArray("test-only-password"));
+        QVERIFY(write(overridePath, "{}"));
+        QCOMPARE(installerConfigPath(name), overridePath);
+        QVERIFY(!readPackagePassword(installerConfigPath(name)));
+        QVERIFY(QFile::remove(overridePath));
+        QCOMPARE(installerConfigPath(name), bundled);
+        QVERIFY(QFile::link(temp.filePath(QStringLiteral("missing")), overridePath));
+        QCOMPARE(installerConfigPath(name), overridePath);
+        QVERIFY(!readPackagePassword(installerConfigPath(name)));
+    }
     void cryptoVectors() {
         QByteArray output(32, '\0');
         QVERIFY(crypto::pbkdf2Sha256(view(QByteArray("password")), view(QByteArray("salt")), 1,

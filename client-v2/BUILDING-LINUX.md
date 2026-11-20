@@ -1,153 +1,150 @@
 # Нативная Linux-сборка RuTool 2.0.8
 
-## Текущий результат и ограничения
+## Состояние порта
 
-ELF и production QML проверены на NixOS с GCC 15.3.0 / Qt 6.11.2, со строгими
-предупреждениями `-Werror`. Нативный исполняемый файл: `build-linux/RuTool`.
-Это локальная сборка, привязанная к установленному SDK; **она не является
-переносимым AppImage**. Снимок интерфейса: `build-linux/linux-smoke.png`.
+Работа продолжается поверх существующего `linux-port`. Пользователь проверил
+нативный клиент на настоящей Blue Archive: поиск игры, каталог, скачивание,
+расшифровку и подпись `.rut`, установку перевода и восстановление оригиналов.
+Эти действия не повторяются автоматически при сборке AppImage.
+Пользователь также сообщил об успешной проверке AppImage на компьютере друга.
 
-Сценарий AppImage подготовлен, но сборка AppImage в данной среде не выполнена:
-нет linuxdeploy/appimagetool, shell не может разрешить GitHub DNS, а доступ
-к Docker socket отклонён. Dockerfile и полный процесс deployment требуют
-проверки в обычной Linux-среде. Бинарная совместимость Windows, Wayland/X11
-на реальном дисплее, production API/Boosty и настоящие пакеты не проверены.
-Нельзя объявлять этот результат готовым релизом.
+Локальный `build-linux/RuTool`, собранный с SDK NixOS, не является переносимым
+релизом. Для AppImage используется отдельная FHS-сборка Ubuntu 24.04 / GCC 14 /
+Qt 6.8.3, без Nix-пакетов внутри артефакта. Базовая совместимость: x86_64,
+glibc >=2.39; более старые системы этой сборкой не поддерживаются.
 
-## Сборка
+Результаты готового артефакта: [APPIMAGE-2.0.8-VALIDATION.md](docs/APPIMAGE-2.0.8-VALIDATION.md).
 
-Нужны Linux x86_64, CMake >=3.25, Ninja, C++23-компилятор со `std::expected`
-(например GCC 13/14), Qt >=6.8 с Core, Gui, Qml, Quick, QuickControls2,
-Network, Concurrent и Test. Для упаковки также нужны плагины Wayland,
-QtSvg, imageformats, OpenSSL TLS backend и инструменты Qt QML.
-Сторонние Mbed TLS и zlib уже включены в исходники; Python не нужен для
-обычного запуска тестов.
+## Полная сборка AppImage
 
-Из `client-v2`:
+Из `client-v2`, при доступном Docker daemon и сети:
 
 ```sh
-export CMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64
-./scripts/build-linux.sh
-./build-linux/RuTool
+./scripts/build-appimage-container.sh dist-appimage
 ```
 
-Или `cmake --preset linux-release`, `cmake --build --preset linux-release`,
-`ctest --test-dir build-linux --output-on-failure`.
-На NixOS для локальной компиляции нужно предоставить обычные пути к уже
-установленным компилятору, CMake/Ninja, Qt и OpenGL через PATH и
-CMAKE_PREFIX_PATH. Проект не создаёт flake и не устанавливает Nix-пакеты.
+Каталог результата должен отсутствовать; для следующей сборки укажи другое имя.
+Сценарий выполняет следующие действия:
 
-Для безопасной проверки production QML без API, поиска игры и постоянных
-настроек:
+1. Собирает `sdk-bootstrap` из `packaging/linux/Dockerfile`. Ubuntu закреплена
+   digest; aqtinstall — версией 3.3.0, Qt — версией 6.8.3.
+2. Размещает Qt SDK в `build-linux-sdk/`, подключая его к `/opt/Qt` контейнера.
+   Это позволяет хранить SDK на диске проекта без дублирования большого слоя Docker.
+3. Загружает инструменты из конкретных официальных релизов, проверяя SHA-256
+   из `packaging/linux/deployment-tools.lock`. Никаких загрузок `latest`.
+4. Собирает `build-linux-release-tests/` с тестами и выполняет CTest. Тестовый
+   контейнер получает синтетический `/etc/machine-id`, не данные хоста.
+5. Отдельно собирает `build-appimage/` с `BUILD_TESTING=OFF` и `-Werror`.
+6. Устанавливает только релизные targets и ресурсы, выполняет Qt/QML deployment,
+   проверяет AppDir, загружает production QML в offscreen-режиме.
+7. Создаёт `dist-appimage/RuTool-2.0.8-x86_64.AppImage` с закреплённым Type 2 runtime,
+   проверяет ELF/SquashFS, извлекает результат, проверяет его состав и повторно
+   выполняет QML smoke test. SHA-256 сохраняется в `dist-appimage/SHA256SUMS`.
+
+В AppImage входят Qt/QML, XCB/Wayland/offscreen plugins, GIF/SVG/imageformats,
+OpenSSL TLS backend, OpenSSL, libstdc++ и libOpenGL. glibc, графические драйверы и доверенные
+CA остаются системными. Сценарии не устанавливают перевод и ничего не публикуют.
+
+В этом NixOS обработчик binfmt AppImage использует `/run/binfmt/appimage`.
+В обычном контейнере этот путь недоступен, и прямой запуск AppImage может вернуть
+`ENOENT`. Поэтому упаковка извлекает **проверенные оригинальные** инструменты
+через SquashFS и запускает их содержимое. Аналогично проверяется готовый пакет.
+Заголовки, runtime и содержимое выпускаемого AppImage при этом не изменяются.
+
+Контрольные суммы инструментов фиксированы в Git; для Qt plugin старого релиза
+GitHub не предоставляет asset digest, его SHA-256 зафиксирована после загрузки
+с официального HTTPS URL. Остальные три суммы сверены с GitHub asset digest.
+Версии apt-пакетов и транзитивных Python-зависимостей не закреплены; сборка
+повторяемая по сценарию, но побитовая воспроизводимость не заявляется.
+`SOURCE_DATE_EPOCH` по умолчанию равен `1767225600`.
+
+## Проверка без установленного Qt
 
 ```sh
-QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
-  ./build-linux/RuTool --smoke-test --smoke-screenshot ./build-linux/window.png
+./scripts/verify-appimage-clean.sh \
+  dist-appimage/RuTool-2.0.8-x86_64.AppImage build-linux-validation
 ```
 
-Два CTest-набора проверяют production QML и Linux-платформу. В платформенном
-наборе: PBKDF2/AES-GCM/P-256, локальное шифрование и права ключа, ссылки,
-блокировки, fsync/rename, Steam/Proton, процесс игры, многоблочный `.rut`,
-установка/отказ commit guard/восстановление, повреждённый журнал, отмена,
-скачивание/докачка/хеши/HTTP Range/redirect через искусственный транспорт.
-Все изменяемые файлы создаются в QTemporaryDir. Тестовый EC scalar 1 —
-общеизвестная фикстура, не производственный ключ; реальные ключи подписи
-не нужны. Для пересоздания фикстур требуется Python `cryptography >=43`:
-`python3 tests/linux/generate_fixtures.py`.
+В новом Ubuntu-контейнере устанавливаются только системные runtime-библиотеки,
+шрифты и инструменты проверки. Qt/SDK и исходники приложения туда не подключаются.
+Сценарий проверяет отсутствие установленного Qt и `/nix/store`, извлекает AppImage
+и запускает production QML с пустым окружением через `AppRun --smoke-test`.
+Результат: `build-linux-validation/clean-smoke.log` и `clean-smoke.png`.
+Это проверка загрузки и отрисовки QML, а не установка перевода или проверка API.
+
+`check-appdir.py` проверяет x86_64 ELF, интерпретаторы и динамические зависимости,
+отсутствие `/nix/store` и внешних ссылок, Qt/QML/TLS plugins, наличие оригинальной
+конфигурации. Проверка отклоняет QtTest/CTest, тесты/фикстуры, `.rut`/ZIP,
+Python-генераторы, исходники C++, CMake cache, объектные и статические библиотеки.
+Она применяется и к AppDir, и к извлечённому готовому AppImage.
 
 ## Конфигурация и данные
 
-* Публичный `update-public.der` копируется в `build-linux/app/config` при
-  конфигурации и устанавливается в `usr/bin/app/config` при упаковке.
-* Пароль `.rut` читается из `${XDG_CONFIG_HOME:-$HOME/.config}/rutool/installer-keys.json`.
-  Формат прежний: `FormatVersion: 1`, `RutPassword: строка`.
-  **Используй свой разрешённый файл; реальные значения не включаются в
-  примеры, AppDir или AppImage.** Без него production-пакет не расшифруется.
-* Операционные настройки, загрузки, оригинальные копии:
+* Оригинальный публичный `config/installer-keys.json` устанавливается рядом с
+  `update-public.der` в `usr/bin/app/config/`. Он не встроен в исполняемый код.
+  Приложение находит этот файл автоматически.
+* `${XDG_CONFIG_HOME:-$HOME/.config}/rutool/installer-keys.json` имеет приоритет.
+  Отсутствующий файл означает использование штатного; ошибочный, нечитаемый
+  файл или битая ссылка приводят к ошибке чтения, без молчаливого fallback.
+* Значение `RutPassword` не выводится. Проверка пакета сравнивает исходный и
+  упакованный файлы по SHA-256 без раскрытия содержимого.
+* Операционные данные и оригинальные копии:
   `${XDG_DATA_HOME:-$HOME/.local/share}/RuToolInstaller/`.
-* Ключ локального AES-GCM: `RuToolInstaller/private/local.key` внутри этого
-  каталога, права `0600`; каталог `private` — `0700`.
-  Сохраняй этот ключ вместе с резервными данными: его утрата делает сохранённые
-  коды и незавершённые журналы восстановления недоступными.
-* Настройки окна: `${XDG_DATA_HOME:-$HOME/.local/share}/RuTool/RuToolInstaller/settings.ini`.
+* Локальный ключ AES-GCM: `RuToolInstaller/private/local.key`, права `0600`;
+  каталог `private` — `0700`. Сохраняй ключ вместе с резервными данными.
+* Настройки окна:
+  `${XDG_DATA_HOME:-$HOME/.local/share}/RuTool/RuToolInstaller/settings.ini`.
 
-DPAPI-данные Windows не переносятся автоматически. Расширение журнала
-`.baretool-transaction.dpapi` сохранено ради общей логики, но Linux-содержимое
-имеет собственный заголовок `RULOC1` и аутентифицировано AES-GCM.
-Linux-обновление приложения отключено: заменяй AppImage вручную. Проверки
-подписей пакетов, серверные attestations и аутентификация сохранены.
-Steam-поиск учитывает libraryfolders.vdf, appmanifest, Flatpak и типовые
-каталоги Proton. Обнаруженные алиасы Steam приводятся к реальному пути.
-Если установок несколько, автоматически выбирается первая по сортировке;
-для другой используй существующую кнопку выбора папки.
-
-## AppImage
-
-Собирать переносимый релиз нужно в обычном Linux SDK с подходящим glibc,
-например в Ubuntu 24.04 x86_64. Такая сборка ориентирована на glibc >=2.39;
-поддержку более старых систем нужно проверять отдельной сборкой на старой базе.
-Сценарий намеренно отвергает ELF с зависимостями от `/nix/store`.
-Qt/QML, Qt плагины, OpenSSL и libstdc++ включаются в AppDir; glibc и
-графические драйверы остаются системными. Доверенные CA берутся из ОС.
-
-Подготовь отдельный каталог инструментов, скачанных из официальных релизов:
-
-* https://github.com/linuxdeploy/linuxdeploy/releases
-* https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases
-* https://github.com/AppImage/appimagetool/releases
-* https://github.com/AppImage/type2-runtime/releases
-
-В нём должны лежать `linuxdeploy-x86_64.AppImage`,
-`linuxdeploy-plugin-qt-x86_64.AppImage`, `appimagetool-x86_64.AppImage`,
-`runtime-x86_64` и `SHA256SUMS`. Первые три файла должны быть исполняемыми.
-Выбирай конкретные версии/релизные артефакты, проверяй их происхождение и
-фиксируй SHA-256 каждого файла в SHA256SUMS; сценарий не скачивает `latest`.
-Копию lock-файла он сохраняет рядом с результатом.
-
-```sh
-export QMAKE=/path/to/Qt/6.8.3/gcc_64/bin/qmake
-export RUTOOL_TOOLS_DIR=/path/to/pinned-tools
-export SOURCE_DATE_EPOCH=1767225600
-./scripts/package-appimage.sh ./build-linux ./dist-linux
-```
-
-Каталог результата должен быть новым. Сценарий выполняет CTest, устанавливает
-AppDir, собирает Qt/QML и динамические плагины, проверяет ELF-зависимости,
-запрещает секретные файлы и внешние ссылки, выполняет QML smoke-test, создаёт
-`dist-linux/RuTool-2.0.8-x86_64.AppImage`, запускает smoke-test AppImage и
-считает SHA-256. Проверки не отключаются ради получения файла.
-Для строгой побитовой воспроизводимости дополнительно зафиксируй digest
-контейнера, apt snapshot/версии пакетов, все Python-зависимости aqt и Qt SDK;
-одного SOURCE_DATE_EPOCH недостаточно. Текущий Dockerfile служит рецептом
-среды, а не утверждением о побитовой воспроизводимости.
-
-Пример сборки в контейнере (из client-v2; BASE_IMAGE задай как
-`ubuntu:24.04@sha256:...` с проверенным digest):
-
-```sh
-docker build --build-arg BASE_IMAGE="$BASE_IMAGE" \
-  -f packaging/linux/Dockerfile -t rutool-linux-builder .
-docker run --rm --user "$(id -u):$(id -g)" \
-  -e HOME=/tmp -v "$PWD:/work" -v "$RUTOOL_TOOLS_DIR:/tools:ro" \
-  rutool-linux-builder bash -lc \
-  './scripts/build-linux.sh build-appimage && ./scripts/package-appimage.sh build-appimage dist-appimage'
-```
-
-Контекст Docker исключает config/installer-keys.json; сам Dockerfile не
-копирует исходники. Не публикуй контейнерный build context или артефакты с
-другими локальными секретами. Сценарии не выполняют публикацию.
+DPAPI-данные Windows автоматически не переносятся. Linux использует формат
+`RULOC1` с AES-GCM; расширение журнала `.baretool-transaction.dpapi` сохранено.
+Linux self-update отключён: AppImage заменяется вручную. Проверки подписей,
+серверные attestations, TLS и аутентификация остаются включены.
 
 ## Запуск
+
+На обычном Linux:
 
 ```sh
 chmod +x RuTool-2.0.8-x86_64.AppImage
 ./RuTool-2.0.8-x86_64.AppImage
+# Без FUSE:
+./RuTool-2.0.8-x86_64.AppImage --appimage-extract-and-run
 ```
 
-Без FUSE: `APPIMAGE_EXTRACT_AND_RUN=1 ./RuTool-2.0.8-x86_64.AppImage`.
-На NixOS обычно нужен предоставляемый системой `appimage-run`:
-`appimage-run ./RuTool-2.0.8-x86_64.AppImage`.
-Он обеспечивает FHS-окружение и ELF loader; Qt вручную устанавливать не нужно.
-Это запуск стандартного AppImage, не отдельная Nix-упаковка приложения.
-При проблеме Wayland можно проверить `QT_QPA_PLATFORM=xcb`; реальный
-Wayland/X11 и запуск без установленного Qt требуют тестов готового артефакта.
+На NixOS используется FHS-окружение `appimage-run`:
+
+```sh
+appimage-run ./RuTool-2.0.8-x86_64.AppImage
+# На текущем хосте зарегистрирован также этот путь:
+/run/binfmt/appimage ./RuTool-2.0.8-x86_64.AppImage
+```
+
+Qt отдельно устанавливать не нужно. Для безопасного smoke test добавь
+`--smoke-test`; он использует временные XDG-каталоги, не запускает поиск игры,
+сетевые операции или установку. Для offscreen задай `QT_QPA_PLATFORM=offscreen` и `QT_QUICK_BACKEND=software`. Для проверки X11 можно задать `QT_QPA_PLATFORM=xcb`.
+
+## Сборка клиента и тестов без упаковки
+
+Нужны C++23 со `std::expected`, CMake >=3.25, Ninja и Qt >=6.8 с Core, Gui,
+Qml, Quick, QuickControls2, Network, Concurrent и Test. Mbed TLS и zlib уже
+находятся в исходниках.
+
+```sh
+export CMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64
+./scripts/build-linux.sh
+# Только релизный клиент:
+./scripts/build-linux.sh build-release -DBUILD_TESTING=OFF
+```
+
+Для ручной упаковки существующей FHS-сборки:
+
+```sh
+./scripts/fetch-appimage-tools.sh build-linux-tools
+export QMAKE=/path/to/Qt/6.8.3/gcc_64/bin/qmake
+export RUTOOL_TOOLS_DIR="$PWD/build-linux-tools"
+./scripts/package-appimage.sh build-release dist-manual
+```
+
+Тесты используют `QTemporaryDir` и синтетические данные. Они остаются в
+репозитории и не устанавливаются в AppImage. Пересоздание криптографических
+фикстур требует Python `cryptography >=43`; обычному запуску тестов он не нужен.

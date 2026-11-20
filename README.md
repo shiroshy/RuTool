@@ -1,14 +1,12 @@
-# RuTool Installer
+# RuTool Installer 2.0.8 — Linux
 
-Открытый код инсталлера находится в [client-v2](client-v2/).
-Собственный код распространяется под Apache-2.0; сторонние компоненты и
-изображения сохраняют свои условия. См. `client-v2/LICENSE` и `client-v2/NOTICE`
+Рабочий Linux-порт RuTool для Blue Archive: поиск игры, скачивание и установка
+перевода, восстановление оригинальных файлов. AppImage проверен на другом компьютере.
 
-# Sponsors:
-- FaJoKi - оплата хостинга 500р + донат 250р.
-- Nope_39 - оплата хостинга 500р.
-- Herstin _ - оплата хостинга 500р.
-- Zibrash - донат 300р.
-- AfteraDev - донат 25р.
+**Linux x86_64, glibc ≥2.39.** Qt включён в AppImage.
 
-> Поддержать меня: https://boosty.to/shizukax
+[Сборка и запуск](client-v2/BUILDING-LINUX.md) · [Результаты проверок](client-v2/docs/APPIMAGE-2.0.8-VALIDATION.md)
+
+Оригинальный проект: [shiroshy/RuTool](https://github.com/shiroshy/RuTool).
+Код — [Apache-2.0](client-v2/LICENSE); условия сторонних компонентов — в [NOTICE](client-v2/NOTICE).
+[Поддержать автора оригинала](https://boosty.to/shizukax).

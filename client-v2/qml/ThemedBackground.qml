@@ -1,5 +1,21 @@
 import QtQuick
+
 Item {
-    Image { anchors.fill: parent; source: "qrc:/assets/Background.png"; fillMode: Image.PreserveAspectCrop; opacity: 1 - Theme.mix }
-    Image { anchors.fill: parent; source: "qrc:/assets/BackgroundDark.jpg"; fillMode: Image.PreserveAspectCrop; opacity: Theme.mix }
+    id: background
+    property int verticalAlignment: Image.AlignVCenter
+
+    Image {
+        anchors.fill: parent
+        source: "qrc:/assets/Background.png"
+        fillMode: Image.PreserveAspectCrop
+        verticalAlignment: background.verticalAlignment
+    }
+    Image {
+        objectName: "darkBackgroundImage"
+        anchors.fill: parent
+        source: "qrc:/assets/BackgroundDark.jpg"
+        fillMode: Image.PreserveAspectCrop
+        verticalAlignment: background.verticalAlignment
+        opacity: Theme.mix
+    }
 }

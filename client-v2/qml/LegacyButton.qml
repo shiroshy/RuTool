@@ -38,8 +38,8 @@ Button {
     background: LegacySurface {
         radius: 7
         visible: !button.link
-        firstColor: button.chrome ? "transparent" : !button.enabled ? Theme.color("#e4eef8") : button.primary ? Theme.color("#19ddec") : button.surfaceFirst
-        lastColor: button.chrome ? "transparent" : !button.enabled ? Theme.color("#e4eef8") : button.primary ? Theme.color("#00a3f7") : button.surfaceLast
+        firstColor: button.chrome ? "transparent" : !button.enabled ? Theme.color("#e4eef8") : button.primary ? Theme.primaryStart : button.surfaceFirst
+        lastColor: button.chrome ? "transparent" : !button.enabled ? Theme.color("#e4eef8") : button.primary ? Theme.primaryEnd : button.surfaceLast
         gradientY: button.primary ? button.primaryGradientY : 1
         edgeColor: button.chrome ? "transparent" : !button.enabled ? Theme.color("#b7cbdd") : button.hovered ? Theme.color("#159cfa") : button.primary ? button.primaryEdge : button.normalEdge
         edgeWidth: button.chrome ? 0 : button.primary ? button.primaryEdgeWidth : 1

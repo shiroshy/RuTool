@@ -5,7 +5,7 @@ LegacyDialogWindow {
     id: panel
     property var entries: []
     objectName: "creditsWindow"; dock: "center"
-    panelWidth: 490; panelHeight: 470
+    panelWidth: 550; panelHeight: 470
     title: "Credits · RuTool"
     wash: Theme.color("#c3eaf5ff"); headerMargin: 23; brandX: 24; captionX: 125
     caption: "/  CREDITS"; stripes: false; plainClose: true; wedge: "M0,0 L243,0 276,60 0,60 Z"

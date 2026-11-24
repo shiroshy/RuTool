@@ -16,7 +16,7 @@ ServiceClient::ServiceClient(QByteArray updatePublicKey, std::unique_ptr<QNetwor
 bool ServiceClient::allowedEndpoint(const QUrl& url) {
     return url.isValid() && url.scheme() == QStringLiteral("https") && url.host() == QStringLiteral("bluehalo.site") &&
         url.port(443) == 443 && url.userInfo().isEmpty() && !url.hasQuery() && !url.hasFragment() &&
-        (url.path() == QStringLiteral("/healthz") || url.path() == QStringLiteral("/api/installer/application/latest") ||
+        (url.path() == QStringLiteral("/healthz") || url.path() == QStringLiteral("/api/installer/application/v2/latest") ||
          url.path() == QStringLiteral("/api/installer/content"));
 }
 void ServiceClient::checkHealth() { request(Operation::Health); }
@@ -30,7 +30,7 @@ void ServiceClient::request(Operation operation) {
     const auto id = static_cast<int>(operation);
     if (pending_.value(id)) return;
     const QUrl url(operation == Operation::Health ? QStringLiteral("https://bluehalo.site/healthz") : operation == Operation::Release ?
-                   QStringLiteral("https://bluehalo.site/api/installer/application/latest") : QStringLiteral("https://bluehalo.site/api/installer/content"));
+                   QStringLiteral("https://bluehalo.site/api/installer/application/v2/latest") : QStringLiteral("https://bluehalo.site/api/installer/content"));
     if (!allowedEndpoint(url)) return;
     QNetworkRequest request(url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);

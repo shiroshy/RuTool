@@ -12,6 +12,12 @@ namespace rutool::platform {
 namespace {
 Error io(const QString& text) { return {ErrorCode::Io, text, QStringLiteral("Win32 error %1").arg(GetLastError())}; }
 const wchar_t* wide(const QString& path) { return reinterpret_cast<const wchar_t*>(path.utf16()); }
+QString apiPath(const QString& native) {
+    const auto prefix = QStringLiteral(R"(\\?\)");
+    if (native.size() < MAX_PATH || native.startsWith(prefix)) return native;
+    if (native.startsWith(QStringLiteral(R"(\\)"))) return prefix + QStringLiteral(R"(UNC\)") + native.sliced(2);
+    return prefix + native;
+}
 struct Handle { HANDLE value{INVALID_HANDLE_VALUE}; ~Handle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); } };
 }
 Result<void> requireGameClosed() {
@@ -29,7 +35,7 @@ Result<void> requireGameClosed() {
 Result<void> requireSafeFile(const QString& path) {
     auto current = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
     while (!current.isEmpty()) {
-        const auto attributes = GetFileAttributesW(wide(current));
+        const auto attributes = GetFileAttributesW(wide(apiPath(current)));
         if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
             return std::unexpected(io(QStringLiteral("Файл недоступен или находится за ссылкой/junction.")));
         const auto parent = QFileInfo(current).absolutePath();
@@ -42,7 +48,7 @@ Result<void> requireSafeFile(const QString& path) {
 Result<void> requireSafeDirectory(const QString& path) {
     auto current = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
     while (!current.isEmpty()) {
-        const auto attributes = GetFileAttributesW(wide(current));
+        const auto attributes = GetFileAttributesW(wide(apiPath(current)));
         if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY) || (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return std::unexpected(io(QStringLiteral("Небезопасный каталог или junction.")));
         const auto parent = QFileInfo(current).absolutePath(); if (QDir::cleanPath(parent).compare(QDir::cleanPath(current), Qt::CaseInsensitive) == 0) break; current = QDir::toNativeSeparators(parent);
     }
@@ -50,7 +56,7 @@ Result<void> requireSafeDirectory(const QString& path) {
 }
 Result<void> flushFile(const QString& path) {
     const auto native = QDir::toNativeSeparators(path);
-    Handle file{CreateFileW(wide(native), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+    Handle file{CreateFileW(wide(apiPath(native)), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
     if (file.value == INVALID_HANDLE_VALUE || !FlushFileBuffers(file.value)) return std::unexpected(io(QStringLiteral("Не удалось надёжно записать файл на диск.")));
     return {};
 }
@@ -77,7 +83,7 @@ Result<void> requireFreeSpace(const std::vector<std::pair<QString, quint64>>& wr
 }
 Result<void> replaceFile(const QString& staged, const QString& target) {
     const auto source = QDir::toNativeSeparators(staged), destination = QDir::toNativeSeparators(target);
-    if (!ReplaceFileW(wide(destination), wide(source), nullptr, 0, nullptr, nullptr))
+    if (!ReplaceFileW(wide(apiPath(destination)), wide(apiPath(source)), nullptr, 0, nullptr, nullptr))
         return std::unexpected(io(QStringLiteral("Не удалось атомарно заменить файл игры.")));
     return {};
 }
@@ -99,7 +105,7 @@ Result<std::unique_ptr<FileLock>> FileLock::read(const QString& path, bool allow
     if (!safe) return std::unexpected(safe.error());
     const auto native = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
     std::unique_ptr<FileLock> lock(new FileLock);
-    lock->handle_ = CreateFileW(wide(native), GENERIC_READ, FILE_SHARE_READ | (allowReplace ? FILE_SHARE_DELETE : 0U), nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    lock->handle_ = CreateFileW(wide(apiPath(native)), GENERIC_READ, FILE_SHARE_READ | (allowReplace ? FILE_SHARE_DELETE : 0U), nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (lock->handle_ == INVALID_HANDLE_VALUE) return std::unexpected(io(QStringLiteral("Файл занят другой операцией.")));
     return lock;
 }
@@ -108,7 +114,7 @@ Result<std::unique_ptr<FileLock>> FileLock::operation(const QString& target) {
     if (!safe) return std::unexpected(safe.error());
     const auto path = QDir::toNativeSeparators(target + QStringLiteral(".baretool.lock"));
     std::unique_ptr<FileLock> lock(new FileLock);
-    lock->handle_ = CreateFileW(wide(path), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, OPEN_ALWAYS,
+    lock->handle_ = CreateFileW(wide(apiPath(path)), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, OPEN_ALWAYS,
         FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (lock->handle_ == INVALID_HANDLE_VALUE) return std::unexpected(io(QStringLiteral("Установку уже выполняет другой экземпляр программы.")));
     BY_HANDLE_FILE_INFORMATION info{};
@@ -120,7 +126,7 @@ Result<std::unique_ptr<FileLock>> FileLock::directoryLease(const QString& direct
     auto safe = requireSafeDirectory(directory); if (!safe) return std::unexpected(safe.error());
     const auto path = QDir::toNativeSeparators(QDir(directory).filePath(QStringLiteral(".lease")));
     std::unique_ptr<FileLock> lock(new FileLock);
-    lock->handle_ = CreateFileW(wide(path), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    lock->handle_ = CreateFileW(wide(apiPath(path)), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (lock->handle_ == INVALID_HANDLE_VALUE) return std::unexpected(io(QStringLiteral("Каталог принадлежит другой операции.")));
     return lock;
 }
@@ -128,7 +134,7 @@ Result<std::unique_ptr<FileLock>> FileLock::cacheEntry(const QString& target) {
     auto safe = requireSafeDirectory(QFileInfo(target).absolutePath()); if (!safe) return std::unexpected(safe.error());
     const auto path = QDir::toNativeSeparators(QFileInfo(target).absoluteFilePath() + QStringLiteral(".lease"));
     std::unique_ptr<FileLock> lock(new FileLock);
-    lock->handle_ = CreateFileW(wide(path), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, OPEN_ALWAYS,
+    lock->handle_ = CreateFileW(wide(apiPath(path)), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, OPEN_ALWAYS,
         FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (lock->handle_ == INVALID_HANDLE_VALUE) return std::unexpected(io(QStringLiteral("Пакет используется другим экземпляром инсталлера.")));
     BY_HANDLE_FILE_INFORMATION info{};

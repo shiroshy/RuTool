@@ -11,6 +11,7 @@
 #include <QUuid>
 #include <QRegularExpression>
 #include <QtConcurrent>
+#include <utility>
 
 namespace {
 QString operationalRoot() { return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath(QStringLiteral("RuToolInstaller")); }
@@ -20,6 +21,7 @@ rutool::Error failure(const QString& message) { return {rutool::ErrorCode::Inval
 void ClientController::initializeOperationsConnections() {
     connect(&workWatcher_, &QFutureWatcherBase::finished, this, [this] {
         const auto result = workWatcher_.result(); busy_ = false; cancellable_ = true;
+        const bool addonWork = std::exchange(addonWork_, false);
         const bool packageWork = packagePending();
         const bool downloaded = packageWork && (packageDownloading() || (packagePath_.isEmpty() && !packageName_.isEmpty()));
         packagePhase_ = PackagePhase::Idle;
@@ -28,7 +30,9 @@ void ClientController::initializeOperationsConnections() {
                 premiumAccepted_ = false; premiumValidThrough_ = {}; premiumStatus_ = result.error().message;
                 operationalSettings_.remove(QStringLiteral("BoostyCodeProtected")); saveOperations();
             }
-            packageError_ = result.error().code != rutool::ErrorCode::Cancelled; operationStatus_ = result.error().message;
+            const bool failed = result.error().code != rutool::ErrorCode::Cancelled;
+            if (!addonWork) packageError_ = failed;
+            operationStatus_ = result.error().message;
             if (packageWork) {
                 packageStatus_ = result.error().message; packageHash_.clear();
                 if (downloaded || result.error().code == rutool::ErrorCode::Cancelled) { packagePath_.clear(); packageName_.clear(); session_.reset(); }
@@ -41,7 +45,7 @@ void ClientController::initializeOperationsConnections() {
                 }
                 cleanDownloads(packagePath_);
             }
-            if (packageError_) logError(QStringLiteral("Operation"), QStringLiteral("NATIVE"), result.error().message, result.error().details);
+            if (failed) logError(addonWork ? QStringLiteral("Addon") : QStringLiteral("Operation"), QStringLiteral("NATIVE"), result.error().message, result.error().details);
         }
         else {
             operationStatus_ = result->status;

@@ -7,9 +7,11 @@ Item {
     parent: transientParent ? transientParent.contentItem : null
     property real panelWidth: 780
     property real panelHeight: 735
-    width: Math.min(panelWidth, parent ? parent.width - 32 : panelWidth)
-    height: Math.min(panelHeight, parent ? parent.height - 32 : panelHeight)
+    width: parent ? Math.min(panelWidth, parent.width - (sideDock ? 0 : 32)) : panelWidth
+    height: parent ? (sideDock ? parent.height : Math.min(panelHeight, parent.height - 32)) : panelHeight
     property string dock: "center"
+    property real backdropOpacity: 0.32
+    readonly property bool sideDock: dock === "left" || dock === "right"
     property string title: ""
     property bool opened: false
     property bool canDismiss: true
@@ -21,10 +23,12 @@ Item {
     enabled: opened
     z: 40
     clip: true
-    readonly property real finalX: !parent ? 0 : dock === "left" ? 16 : dock === "right" ? parent.width - width - 16 : (parent.width - width) / 2
-    readonly property real finalY: !parent ? 0 : dock === "center" ? (parent.height - height) / 2 : parent.height - height - 16
-    x: finalX + (1-progress) * (dock === "left" ? -width-16 : dock === "right" ? width+16 : 0)
-    y: finalY + (1-progress) * (parent ? parent.height - finalY : height)
+    readonly property real finalX: !parent ? 0 : dock === "right" ? parent.width - width
+                                         : dock === "center" ? (parent.width - width) / 2 : dock === "left" ? 0 : 16
+    readonly property real finalY: !parent || sideDock ? 0 : dock === "bottomLeft" ? parent.height - height - 16
+                                         : (parent.height - height) / 2
+    x: finalX + (1-progress) * (dock === "left" ? -width : dock === "right" ? width : 0)
+    y: finalY + (sideDock ? 0 : (1-progress) * (parent ? parent.height - finalY : height))
     function show() { if (!opened && transientParent) returnFocus = transientParent.activeFocusItem; opened = true; forceActiveFocus() }
     function close() { if (canDismiss) opened = false }
     onVisibleChanged: {
@@ -33,14 +37,21 @@ Item {
     Keys.onEscapePressed: close()
     Rectangle {
         parent: dialog.parent; anchors.fill: parent; z: dialog.z - 1
-        visible: dialog.visible; opacity: dialog.progress * 0.32; color: "#071a30"
+        visible: dialog.visible; opacity: dialog.progress * dialog.backdropOpacity; color: "#071a30"
         HoverHandler { enabled: dialog.visible; blocking: true; cursorShape: Qt.ArrowCursor }
         MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: dialog.close() }
     }
     MouseArea { anchors.fill: parent; hoverEnabled: true }
-    ThemedBackground { anchors.fill: parent; anchors.margins: 1 }
-    Rectangle { anchors.fill: parent; anchors.margins: 1; color: dialog.wash }
-    Rectangle { anchors.fill: parent; color: "transparent"; border.color: Theme.color("#91bfe8") }
+    ThemedBackground { visible: !dialog.sideDock; anchors.fill: parent; anchors.margins: 1 }
+    Rectangle { anchors.fill: parent; anchors.margins: dialog.sideDock ? 0 : 1; color: dialog.wash }
+    Rectangle { visible: !dialog.sideDock; anchors.fill: parent; color: "transparent"; border.color: Theme.color("#91bfe8") }
+    Rectangle {
+        visible: dialog.sideDock
+        x: dialog.dock === "right" ? 0 : dialog.width - width
+        width: 1
+        height: parent.height
+        color: Theme.color("#cbddeb")
+    }
     property color wash: Theme.color("#bceaf5ff")
     property real headerMargin: 25
     property string caption: ""
@@ -53,6 +64,40 @@ Item {
     property real captionX: 160
     property real captionY: 32
     Item {
+        visible: dialog.sideDock
+        width: parent.width
+        height: 68
+        LegacyText {
+            anchors.left: parent.left
+            anchors.leftMargin: 26
+            anchors.right: drawerDismiss.left
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            text: dialog.caption
+            font.pixelSize: 24
+            font.bold: true
+            elide: Text.ElideRight
+        }
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.color("#cbddeb") }
+        LegacyButton {
+            id: drawerDismiss
+            anchors.right: parent.right
+            anchors.rightMargin: 18
+            anchors.verticalCenter: parent.verticalCenter
+            width: 30; height: 30
+            visible: dialog.closeButton
+            padding: 0
+            leftPadding: 0; rightPadding: 0
+            hint: "Закрыть"
+            Accessible.name: hint
+            onClicked: dialog.close()
+            contentItem: Item {
+                LegacyIcon { anchors.centerIn: parent; kind: "close"; width: 12; height: 12; stroke: Theme.text }
+            }
+        }
+    }
+    Item {
+        visible: !dialog.sideDock
         x: dialog.headerMargin; y: 1; width: dialog.width - 2 * dialog.headerMargin; height: 74
         Shape {
             width: 326; height: 63; preferredRendererType: Shape.CurveRenderer

@@ -22,7 +22,7 @@ Result<TranslationRelease> parseItem(const QJsonObject& object, bool main) {
 }
 }
 bool premiumAssetUrl(const QUrl& url) {
-    static const QRegularExpression path(QStringLiteral("^/api/installer/premium/packages/(?:[a-f0-9]{32}|main)$"));
+    static const QRegularExpression path(QStringLiteral("^/api/installer/premium/(?:packages/(?:[a-f0-9]{32}|main)|addons/loading-screens)$"));
     return allowedAssetUrl(url) && url.host() == QStringLiteral("bluehalo.site") && url.query().isEmpty() && path.match(url.path()).hasMatch();
 }
 Result<PremiumStatus> parsePremiumStatus(const QJsonObject& json) {
@@ -51,6 +51,10 @@ Result<PremiumCatalogInfo> parsePremiumCatalogResponse(const QJsonObject& json) 
         if (!main.isObject()) return std::unexpected(invalid());
         auto item = parseItem(main.toObject(), true); if (!item) return std::unexpected(item.error()); result.main = std::move(*item);
     }
+    const auto addon = apiValue(json, QStringLiteral("LoadingScreens")).toObject();
+    const auto bytes = apiValue(addon, QStringLiteral("PackageBytes")).toInteger();
+    const auto sha256 = apiValue(addon, QStringLiteral("PackageSha256")).toString();
+    if (bytes > 0 && bytes <= 64 * 1024 * 1024 && isHash(sha256)) result.loadingScreens = PremiumAddon{bytes, sha256};
     return result;
 }
 }

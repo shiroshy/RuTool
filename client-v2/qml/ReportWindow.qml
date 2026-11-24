@@ -5,11 +5,12 @@ import "LegacyContent.js" as Copy
 
 LegacyDialogWindow {
     id: dialog
-    objectName: "reportWindow"; dock: "right"
-    panelWidth: 650; panelHeight: 775
+    objectName: "reportWindow"; dock: "left"
+    panelWidth: 570
     title: "Сообщить о проблеме · RuTool"
-    headerMargin: 25; brandX: 47; captionX: 160
-    caption: "/  СООБЩИТЬ О ПРОБЛЕМЕ"
+    caption: "Сообщить о проблеме"
+    wash: Theme.color("#f6faff")
+    backdropOpacity: 0.24
     property var attachments: []
     property string feedback: ""
     property bool diagnosticSelection: false
@@ -37,9 +38,8 @@ LegacyDialogWindow {
             dialog.addFiles(selectedFiles, false)
         }
     }
-    LegacySurface {
-        id: panel; x: 25; y: 75; width: dialog.width - 50; height: dialog.height - 98
-        firstColor: Theme.color("#f8ffffff"); lastColor: Theme.color("#eef1f9ff"); edgeColor: Theme.color("#91c6f1"); radius: 11
+    Item {
+        id: panel; width: dialog.width; y: 68; height: dialog.height - y
         Flickable {
             id: formScroll; objectName: "reportFormScroll"
             x: 28; y: 24; width: panel.width - 56; height: panel.height - 48

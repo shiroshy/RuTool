@@ -1,14 +1,20 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 
 LegacyDialogWindow {
     id: dialog
     objectName: "translationsWindow"
-    panelWidth: 810; panelHeight: 700
-    title: "Переводы · RuTool"
-    caption: "/  ПЕРЕВОДЫ"
+    dock: "right"
+    backdropOpacity: 0.24
+    panelWidth: 530
+    title: "Скачать перевод · RuTool"
+    caption: "Скачать перевод"
+    wash: Theme.color("#f6faff")
     property var primaryRelease: null
     property var releases: []
+    property bool loadingScreensAvailable: false
+    property bool gameReady: false
     property bool mainServerAvailable: client.premiumMainAvailable
     readonly property var orderedReleases: {
         var additional = releases.slice().sort(function(a, b) { return String(b.publishedAt).localeCompare(String(a.publishedAt)) })
@@ -17,51 +23,174 @@ LegacyDialogWindow {
     signal manualRequested()
     signal downloadRequested(string releaseId)
     signal codeRequested()
-    LegacySurface {
-        x: 25; y: 75; width: dialog.width - 50; height: dialog.height - 100
-        firstColor: Theme.color("#f8ffffff"); lastColor: Theme.color("#eef1f9ff"); edgeColor: Theme.color("#91c6f1")
-        LegacyText { x: 28; y: 24; text: "Выберите перевод"; font.pixelSize: 24; font.bold: true }
-        LegacyText { x: 28; y: 61; text: "Основной перевод и тестовые сборки для подписчиков бусти."; color: Theme.muted; font.pixelSize: 14 }
+    signal loadingScreensRequested()
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 26
+        anchors.topMargin: 82
+        spacing: 12
+
+        LegacyText {
+            Layout.fillWidth: true
+            text: "После скачивания RuTool проверит пакет и предложит установить его."
+            wrapMode: Text.WordWrap
+            font.pixelSize: 14
+            color: Theme.muted
+        }
         Flickable {
-            id: list; x: 28; y: 98; width: parent.width - 56; height: parent.height - 177
-            clip: true; contentWidth: width; contentHeight: cards.implicitHeight; boundsBehavior: Flickable.StopAtBounds
+            id: list
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            contentWidth: width
+            contentHeight: cards.implicitHeight
+            boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: LegacyScrollBar { anchors.right: list.right }
+
             Column {
-                id: cards; width: list.width - 16; spacing: 14
+                id: cards
+                width: list.width - 12
+                spacing: 12
                 LegacySurface {
-                    visible: !dialog.primaryRelease; width: parent.width; height: visible ? 150 : 0
-                    firstColor: Theme.card; lastColor: Theme.cardEnd; edgeColor: Theme.color("#299ffc")
-                    LegacyText { x: 22; y: 18; text: "Основной перевод"; font.pixelSize: 20; font.bold: true }
-                    LegacyText { x: 22; y: 53; text: "Автор: —     Название: —     Дата загрузки: —"; color: Theme.muted; font.pixelSize: 14 }
-                    LegacyText { x: 22; y: 90; width: parent.width - 44; text: "Данные каталога пока недоступны. Можно выбрать готовый файл вручную."; color: Theme.muted; font.pixelSize: 14; wrapMode: Text.WordWrap }
+                    visible: !dialog.primaryRelease
+                    width: cards.width
+                    height: unavailable.implicitHeight + 34
+                    firstColor: Theme.card; lastColor: Theme.cardEnd
+                    Column {
+                        id: unavailable
+                        x: 17; y: 17
+                        width: parent.width - 34
+                        spacing: 6
+                        LegacyText { text: "Основной перевод"; font.pixelSize: 18; font.bold: true }
+                        LegacyText {
+                            width: parent.width
+                            text: "Основной перевод пока недоступен в каталоге. Если у вас есть файл .rut, выберите его вручную."
+                            color: Theme.muted
+                            font.pixelSize: 14
+                            wrapMode: Text.WordWrap
+                        }
+                    }
                 }
                 Repeater {
                     model: dialog.orderedReleases
                     LegacySurface {
+                        id: card
                         required property var modelData
-                        required property int index
-                        width: cards.width; height: 148
-                        edgeColor: dialog.primaryRelease && index === 0 ? Theme.color("#299ffc") : Theme.border
-                        LegacyText { x: 22; y: 15; text: parent.modelData.premium ? "ТЕСТОВЫЙ ПЕРЕВОД" : dialog.primaryRelease && parent.index === 0 ? "ОСНОВНОЙ · STUDIO" : "ПЕРЕВОД"; color: Theme.color("#299ffc"); font.pixelSize: 12; font.bold: true }
-                        Rectangle {
-                            objectName: "premiumBadge-" + parent.modelData.id
-                            visible: parent.modelData.premium === true; anchors.right: parent.right; anchors.rightMargin: 22; y: 12; width: 89; height: 25; radius: 12
-                            color: Theme.color("#fff1c8"); border.color: Theme.color("#d7a644")
-                            LegacyText { anchors.centerIn: parent; text: "Premium"; font.pixelSize: 12; font.bold: true; color: Theme.color("#805810") }
+                        readonly property bool mainRelease: dialog.primaryRelease !== null && modelData.id === dialog.primaryRelease.id
+                        width: cards.width
+                        height: releaseDetails.implicitHeight + 34
+                        edgeColor: mainRelease ? Theme.color("#299ffc") : Theme.border
+
+                        ColumnLayout {
+                            id: releaseDetails
+                            x: 17; y: 17
+                            width: parent.width - 34
+                            spacing: 8
+                            RowLayout {
+                                Layout.fillWidth: true
+                                LegacyText {
+                                    Layout.fillWidth: true
+                                    text: card.mainRelease ? "Основной перевод" : card.modelData.premium ? "Тестовая сборка" : "Перевод"
+                                    color: Theme.color("#2485cc")
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                }
+                                Rectangle {
+                                    objectName: "premiumBadge-" + card.modelData.id
+                                    visible: card.modelData.premium === true
+                                    Layout.preferredWidth: 78; Layout.preferredHeight: 24
+                                    radius: 12
+                                    color: "#fff1c8"
+                                    border.color: "#d7a644"
+                                    LegacyText { anchors.centerIn: parent; text: "Premium"; font.pixelSize: 12; font.bold: true; color: "#805810" }
+                                }
+                            }
+                            LegacyText {
+                                Layout.fillWidth: true
+                                text: card.modelData.name
+                                font.pixelSize: 19
+                                font.bold: true
+                                elide: Text.ElideRight
+                            }
+                            LegacyText {
+                                Layout.fillWidth: true
+                                text: "Автор: " + card.modelData.author + "  ·  " + card.modelData.publishedAt
+                                font.pixelSize: 13
+                                color: Theme.muted
+                                wrapMode: Text.Wrap
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 10
+                                LegacyButton {
+                                    objectName: "translationDownload-" + card.modelData.id
+                                    text: card.modelData.premium && !client.premiumActive ? "Ввести код бусти" : card.mainRelease ? "Скачать перевод" : "Скачать"
+                                    primary: true
+                                    enabled: !client.busy
+                                    hint: card.mainRelease ? "Скачать с GitHub" : ""
+                                    onClicked: {
+                                        if (card.modelData.premium && !client.premiumActive) dialog.codeRequested()
+                                        else dialog.downloadRequested(card.modelData.id)
+                                    }
+                                }
+                                LegacyButton {
+                                    objectName: "translationMainServer"
+                                    visible: card.mainRelease && dialog.mainServerAvailable
+                                    text: "С сервера · Premium"
+                                    enabled: !client.busy
+                                    onClicked: {
+                                        if (!client.premiumActive) dialog.codeRequested()
+                                        else dialog.downloadRequested("main")
+                                    }
+                                }
+                            }
                         }
-                        LegacyText { x: 22; y: 43; width: parent.width - 44; text: parent.modelData.name; font.pixelSize: 20; font.bold: true; elide: Text.ElideRight }
-                        LegacyText { x: 22; y: 81; width: parent.width - 44; text: "Автор: " + parent.modelData.author + "    ·    Дата загрузки: " + parent.modelData.publishedAt; font.pixelSize: 14; color: Theme.muted; elide: Text.ElideRight }
+                    }
+                }
+                LegacySurface {
+                    visible: dialog.loadingScreensAvailable
+                    width: cards.width
+                    height: addonDetails.implicitHeight + 34
+
+                    ColumnLayout {
+                        id: addonDetails
+                        x: 17; y: 17
+                        width: parent.width - 34
+                        spacing: 8
+                        LegacyText {
+                            text: "Дополнение · Premium"
+                            color: Theme.color("#2485cc")
+                            font.pixelSize: 13
+                            font.bold: true
+                        }
+                        LegacyText { text: "Русские экраны загрузки"; font.pixelSize: 19; font.bold: true }
+                        LegacyText {
+                            Layout.fillWidth: true
+                            text: dialog.gameReady ? "Устанавливается отдельно от основного перевода." : "Для установки укажите папку игры в настройках."
+                            wrapMode: Text.WordWrap
+                            color: Theme.muted
+                            font.pixelSize: 13
+                        }
                         LegacyButton {
-                            objectName: "translationMainServer"; visible: dialog.mainServerAvailable && dialog.primaryRelease && parent.modelData.id === dialog.primaryRelease.id
-                            x: parent.width - 374; y: 108; width: 202; height: 30; text: "С сервера · Premium"; font.pixelSize: 13; enabled: !client.busy
-                            onClicked: { if (!client.premiumActive) dialog.codeRequested(); else dialog.downloadRequested("main") }
+                            objectName: "loadingScreensAction"
+                            text: client.premiumActive ? "Скачать и установить" : "Ввести код бусти"
+                            enabled: !client.busy && (!client.premiumActive || dialog.gameReady)
+                            primary: true
+                            onClicked: {
+                                if (client.premiumActive) dialog.loadingScreensRequested()
+                                else dialog.codeRequested()
+                            }
                         }
-                        LegacyButton { objectName: "translationDownload-" + parent.modelData.id; x: parent.width - 156; y: 108; width: 133; height: 30; text: parent.modelData.premium ? (!client.premiumActive ? "Код бусти" : "Скачать") : "GitHub"; primary: true; font.pixelSize: 13; enabled: !client.busy; onClicked: { if (parent.modelData.premium && !client.premiumActive) dialog.codeRequested(); else dialog.downloadRequested(parent.modelData.id) } }
                     }
                 }
             }
         }
-        LegacyButton { x: 28; anchors.bottom: parent.bottom; anchors.bottomMargin: 22; text: "Ручная установка"; font.pixelSize: 14; onClicked: { dialog.close(); dialog.manualRequested() } }
-        LegacyButton { anchors.right: parent.right; anchors.rightMargin: 28; anchors.bottom: parent.bottom; anchors.bottomMargin: 22; text: "Закрыть"; font.pixelSize: 14; onClicked: dialog.close() }
+        LegacyButton {
+            Layout.alignment: Qt.AlignLeft
+            text: "Выбрать файл .rut"
+            enabled: !client.busy
+            onClicked: { dialog.close(); dialog.manualRequested() }
+        }
     }
 }

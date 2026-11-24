@@ -8,6 +8,9 @@
 #include <QSaveFile>
 #include <QUuid>
 #include <QRegularExpression>
+#include <QTemporaryDir>
+#include <QtEndian>
+#include <QCryptographicHash>
 
 namespace rutool {
 namespace {
@@ -187,8 +190,10 @@ Result<QString> replace(std::vector<FileReplacement> files, const QString& backu
 }
 }
 QString gameDatabasePath(const QString& game) { return QDir(full(game)).filePath(QStringLiteral("BlueArchive_Data/StreamingAssets/PUB/Resource/Preload/TableBundles/ExcelDB.db")); }
-Result<std::optional<QString>> recoverInstallation(const QString& game) {
-    const auto database = gameDatabasePath(game), path = journalPath(database);
+namespace {
+Result<std::optional<QString>> recoverFiles(const std::vector<QString>& paths) {
+    const auto& database = paths.front();
+    const auto path = journalPath(database);
     if (!QFileInfo::exists(path)) return std::optional<QString>{};
     auto operation = platform::FileLock::operation(database); if (!operation) return std::unexpected(operation.error());
     auto closed = platform::requireGameClosed(); if (!closed) return std::unexpected(closed.error());
@@ -200,9 +205,9 @@ Result<std::optional<QString>> recoverInstallation(const QString& game) {
     const auto records = journal.value(QStringLiteral("Files")).toArray(), receipts = journal.value(QStringLiteral("OldReceipts")).toArray();
     const bool retain = journal.value(QStringLiteral("OriginalRetained")).toBool(), committed = journal.value(QStringLiteral("Committed")).toBool(), finished = journal.value(QStringLiteral("Finished")).toBool();
     static const QRegularExpression uuidN(QStringLiteral("^[0-9a-f]{32}$"));
-    if (journal.value(QStringLiteral("FormatVersion")).toInt() != 1 || !uuidN.match(id).hasMatch() || (records.size() != 1 && records.size() != 3) || receipts.size() > 2)
+    if (journal.value(QStringLiteral("FormatVersion")).toInt() != 1 || !uuidN.match(id).hasMatch() || (records.size() != 1 && records.size() != static_cast<qsizetype>(paths.size())) || receipts.size() > 2)
         return std::unexpected(invalid(QStringLiteral("Журнал восстановления повреждён.")));
-    const auto paths = targets(game, records.size() == 3); std::vector<std::unique_ptr<platform::FileLock>> locks;
+    std::vector<std::unique_ptr<platform::FileLock>> locks;
     for (qsizetype i = 0; i < records.size(); ++i) {
         const auto item = records[i].toObject(); const auto target = paths[static_cast<size_t>(i)], backup = item.value(QStringLiteral("Backup")).toString(), stage = item.value(QStringLiteral("Stage")).toString();
         const auto before = item.value(QStringLiteral("Before")).toString(), after = item.value(QStringLiteral("After")).toString();
@@ -250,6 +255,78 @@ Result<std::optional<QString>> recoverInstallation(const QString& game) {
     if (!committed && retain) { QFile::remove(original + QStringLiteral(".baretool-backup.json")); QFile::remove(original + QStringLiteral(".rut-bundle.json")); }
     if (!QFile::remove(path)) return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Восстановление выполнено, но журнал не удалось завершить.")});
     return committed ? std::optional<QString>{original} : std::optional<QString>{};
+}
+}
+Result<std::optional<QString>> recoverInstallation(const QString& game) { return recoverFiles(targets(game, true)); }
+
+Result<QByteArray> applyAddonDelta(QByteArrayView original, QByteArrayView delta) {
+    constexpr qsizetype byteLimit = 64 * 1024 * 1024;
+    constexpr QByteArrayView magic{"RUTD1\0", 6};
+    const auto bad = [] { return invalid(QStringLiteral("Повреждён файл дополнения.")); };
+    if (original.empty() || original.size() > byteLimit || delta.size() > byteLimit || !delta.startsWith(magic))
+        return std::unexpected(bad());
+    QByteArray output;
+    output.reserve(original.size());
+    delta = delta.sliced(magic.size());
+    while (!delta.empty()) {
+        if (delta.size() < 4) return std::unexpected(bad());
+        const auto record = qFromLittleEndian<quint32>(delta.data());
+        const auto length = static_cast<qsizetype>(record & 0x7fffffffu);
+        delta = delta.sliced(4);
+        if (length <= 0 || length > original.size() - output.size()) return std::unexpected(bad());
+        if ((record & 0x80000000u) != 0) {
+            if (delta.size() < length) return std::unexpected(bad());
+            output.append(delta.data(), length);
+            delta = delta.sliced(length);
+        } else {
+            if (delta.size() < 4) return std::unexpected(bad());
+            const auto offset = static_cast<qsizetype>(qFromLittleEndian<quint32>(delta.data()));
+            if (offset > original.size() - length) return std::unexpected(bad());
+            output.append(original.data() + offset, length);
+            delta = delta.sliced(4);
+        }
+    }
+    if (output.size() != original.size()) return std::unexpected(bad());
+    return output;
+}
+Result<InstallationResult> installLoadingScreensAddon(const QString& game, const QString& deltaPath, const QString& backupRoot,
+    const CommitGuard& guard, const Cancellation& cancel) {
+    const auto originalHash = QStringLiteral("484bf96d71159a93249ce99ddedc48c7cb26bf2729c242866e8ec6ee8c11ac80");
+    const auto patchedHash = QStringLiteral("7bd04d57f812d78b8c41f9d8ce3a43502578866ef65d4d5dff7bf78c8429581f");
+    constexpr qint64 bundleSize = 42310619;
+    const auto target = QDir(game).filePath(QStringLiteral("BlueArchive_Data/StreamingAssets/PUB/Resource/Preload/Windows/"
+        "prologgroup-assets-_mx-addressableasset-uis-01_common-12_loading-_mxprolog-2024-11-18_assets_all_2654595875.bundle"));
+    if (game.isEmpty()) return std::unexpected(invalid(QStringLiteral("Выберите папку Blue Archive.")));
+    auto safe = platform::requireSafeFile(target);
+    if (!safe) return std::unexpected(invalid(QStringLiteral("В папке игры не найден поддерживаемый файл экранов загрузки.")));
+    auto recovered = recoverFiles({target});
+    if (!recovered) return std::unexpected(recovered.error());
+    auto current = hashFile(target, cancel);
+    if (!current) return std::unexpected(current.error());
+    if (*current == patchedHash) return InstallationResult{recovered->value_or(QString{}), true};
+    if (*current != originalHash)
+        return std::unexpected(invalid(QStringLiteral("Файл экранов загрузки изменён или относится к другой версии игры.")));
+    QFile original(target), delta(deltaPath);
+    if (!original.open(QIODevice::ReadOnly) || original.size() != bundleSize ||
+        !delta.open(QIODevice::ReadOnly) || delta.size() <= 0 || delta.size() > 64 * 1024 * 1024)
+        return std::unexpected(invalid(QStringLiteral("Не удалось открыть файлы дополнения.")));
+    const auto originalBytes = original.read(bundleSize + 1);
+    const auto deltaBytes = delta.read(delta.size());
+    original.close(); delta.close();
+    if (originalBytes.size() != bundleSize) return std::unexpected(invalid(QStringLiteral("Файл экранов загрузки изменился.")));
+    auto output = applyAddonDelta(originalBytes, deltaBytes);
+    if (!output) return std::unexpected(output.error());
+    if (QCryptographicHash::hash(*output, QCryptographicHash::Sha256).toHex() != patchedHash.toLatin1())
+        return std::unexpected(invalid(QStringLiteral("Контрольная сумма русских экранов загрузки не совпала.")));
+    QTemporaryDir staged;
+    if (!staged.isValid()) return std::unexpected(invalid(QStringLiteral("Не удалось создать временную папку дополнения.")));
+    const auto generated = staged.filePath(QStringLiteral("loading-screens.bundle"));
+    QSaveFile file(generated);
+    if (!file.open(QIODevice::WriteOnly) || file.write(*output) != output->size() || !file.commit())
+        return std::unexpected(invalid(QStringLiteral("Не удалось подготовить русские экраны загрузки.")));
+    auto backup = replace({{target, generated, originalHash, patchedHash, {}}}, backupRoot, true, guard, cancel);
+    if (!backup) return std::unexpected(backup.error());
+    return InstallationResult{*backup, false};
 }
 Result<std::vector<QString>> installationHashes(const QString& game, bool bundle, const Cancellation& cancel) {
     std::vector<QString> result;

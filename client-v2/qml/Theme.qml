@@ -17,7 +17,14 @@ QtObject {
     readonly property color card: color("#f5ffffff")
     readonly property color cardEnd: color("#eef3f9ff")
     readonly property color border: color("#97c9fa")
+    readonly property color primaryStart: "#19ddec"
+    readonly property color primaryEnd: "#00a3f7"
     readonly property var darkColors: ({
+        "#f6faff": "#101d30",
+        "#e8e9f6ff": "#f0071528", "#a8e6f3ff": "#aa0a1e35", "#12e6f3ff": "#160b2845",
+        "#405e7e": "#c8e4ff", "#102944": "#f2f8ff", "#075995": "#9de0ff",
+        "#a3314a": "#ff9aaa", "#805106": "#ffda93",
+        "#eaf6faff": "#e8102034",
         "#e6f3ff": "#081423", "#e9f6ff": "#081423",
         "#10eaf5ff": "#66091324", "#88eaf5ff": "#aa091324",
         "#bceaf5ff": "#c0091324", "#b9eaf5ff": "#c0091324", "#c3eaf5ff": "#c0091324",

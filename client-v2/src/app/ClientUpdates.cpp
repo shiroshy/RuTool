@@ -17,7 +17,7 @@ void ClientController::checkApplicationUpdate(bool candidate) {
     if (updateWatcher_.isRunning()) return;
     const auto key = rutool::updatePublicKey(); const auto cancel = lifetime_;
     updateWatcher_.setFuture(QtConcurrent::run([key, cancel, candidate]() -> rutool::Result<UpdateInfo> {
-        rutool::InstallerApi api(cancel); auto object = api.get(candidate ? QStringLiteral("api/installer/application/candidate") : QStringLiteral("api/installer/application/latest"));
+        rutool::InstallerApi api(cancel); auto object = api.get(candidate ? QStringLiteral("api/installer/application/v2/candidate") : QStringLiteral("api/installer/application/v2/latest"));
         if (!object) return std::unexpected(object.error());
         if (object->isEmpty()) return UpdateInfo{};
         const auto envelope = QJsonDocument(*object).toJson(QJsonDocument::Compact); auto release = rutool::verifyApplicationEnvelope(envelope, key);

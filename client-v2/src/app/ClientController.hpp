@@ -48,6 +48,7 @@ class ClientController final : public QObject {
     Q_PROPERTY(bool premiumActive READ premiumActive NOTIFY changed)
     Q_PROPERTY(QVariantList premiumReleases READ premiumReleases NOTIFY changed)
     Q_PROPERTY(bool premiumMainAvailable READ premiumMainAvailable NOTIFY changed)
+    Q_PROPERTY(bool loadingScreensAvailable READ loadingScreensAvailable NOTIFY changed)
     Q_PROPERTY(QString installationCount READ installationCount NOTIFY changed)
     Q_PROPERTY(bool sendingReport READ sendingReport NOTIFY changed)
     Q_PROPERTY(QString reportCooldown READ reportCooldown NOTIFY changed)
@@ -101,7 +102,9 @@ public:
     bool premiumActive() const { return premiumAccepted_ && premiumValidThrough_.isValid() && premiumValidThrough_ >= QDateTime::currentDateTimeUtc().date(); }
     const QVariantList& premiumReleases() const { return premiumReleases_; }
     bool premiumMainAvailable() const { return premiumMain_ && latestTranslation_ && premiumMain_->sha256 == latestTranslation_->sha256 && premiumMain_->bytes == latestTranslation_->bytes && premiumMain_->originalHash == latestTranslation_->originalHash; }
+    bool loadingScreensAvailable() const { return premiumLoadingScreens_.has_value(); }
     Q_INVOKABLE void loadPremiumCatalog();
+    Q_INVOKABLE void downloadAndInstallLoadingScreens();
     Q_INVOKABLE void verifyBoostyCode();
     Q_INVOKABLE void installTranslation();
     Q_INVOKABLE void restoreFiles();
@@ -160,6 +163,8 @@ private:
     QDate premiumValidThrough_;
     std::vector<rutool::TranslationRelease> premiumTranslations_;
     std::optional<rutool::TranslationRelease> premiumMain_;
+    std::optional<rutool::PremiumAddon> premiumLoadingScreens_;
+    bool addonWork_{};
     QVariantList premiumReleases_;
     QFutureWatcher<rutool::Result<qint64>> countWatcher_;
     QFutureWatcher<rutool::Result<RestoreWork>> restoreWatcher_;

@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ReleaseDirectory,
     [Parameter(Mandatory=$true)][string]$KeysFile,
     [string]$BuildDirectory = (Join-Path $env:LOCALAPPDATA 'RuTool2Builds/Lite-Release'),
-    [string]$Version = '2.0.8',
+    [string]$Version = '2.1.1',
     [string]$SdkRoot,
     [string]$ToolingRoot,
     [string]$Cppcheck,

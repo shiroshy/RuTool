@@ -5,25 +5,23 @@ import "LegacyContent.js" as Copy
 LegacyDialogWindow {
     id: dialog
     objectName: "disclaimerWindow"; dock: "left"
-    panelWidth: 780; panelHeight: 735
+    panelWidth: 650
+    backdropOpacity: 0.24
     title: "Дисклеймер · RuTool Installer"
-    wash: Theme.color("#b9eaf5ff"); headerMargin: 26; brandX: 46; brandSize: 30; captionX: 162
-    caption: "/  I N S T A L L E R"; closeButton: !mandatory; canDismiss: !mandatory
-    wedge: "M0,0 L292,0 326,63 0,63 Z"
+    caption: "Дисклеймер"; closeButton: !mandatory; canDismiss: !mandatory
+    wash: Theme.color("#f6faff")
     property bool mandatory: false
     property bool acknowledged: false
     signal agreementRequested()
     signal consentGiven()
     function showMandatory() { mandatory = true; agreement.checked = false; show() }
     readonly property int paragraphCount: Copy.disclaimer.length
-    LegacySurface {
-        x: 26; y: 75; width: parent.width - 52; height: parent.height - 100
-        firstColor: Theme.color("#f9ffffff"); lastColor: Theme.color("#eef2faff"); edgeColor: Theme.color("#91c6f1"); radius: 11
-        LegacyText { y: 24; width: parent.width; text: "Дисклеймер"; font.pixelSize: 26; font.bold: true; horizontalAlignment: Text.AlignHCenter }
-        Rectangle { x: 198; y: 74; width: parent.width - 396; height: 1; color: Theme.color("#8ecbf2") }
+    Item {
+        x: 26; y: 84; width: parent.width - 52; height: parent.height - 104
         Flickable {
             id: bodyScroll; objectName: "disclaimerScroll"
-            x: 33; y: 90; width: parent.width - 66; height: parent.height - (dialog.mandatory ? 246 : 212)
+            width: parent.width
+            height: agreementLink.y - 14
             contentWidth: width
             contentHeight: paragraphs.implicitHeight
             clip: true
@@ -49,18 +47,18 @@ LegacyDialogWindow {
             }
         }
         LegacyButton {
-            objectName: "sourceArchiveLink"; x: parent.width - width - 33; y: parent.height - (dialog.mandatory ? 150 : 122)
+            objectName: "sourceArchiveLink"; x: parent.width - width; y: parent.height - (dialog.mandatory ? 150 : 122)
             width: 160; text: "Исходный код ↗"; link: true; font.pixelSize: 14
             onClicked: Qt.openUrlExternally("https://github.com/shiroshy/RuTool")
         }
         LegacyButton {
-            objectName: "agreementLink"; x: 33; y: parent.height - (dialog.mandatory ? 150 : 122)
+            id: agreementLink; objectName: "agreementLink"; x: 0; y: parent.height - (dialog.mandatory ? 150 : 122)
             text: "Открыть пользовательское соглашение"; link: true; font.pixelSize: 14
             onClicked: dialog.agreementRequested()
         }
         CheckBox {
             id: agreement; objectName: "agreementConsent"; visible: dialog.mandatory
-            x: 33; y: parent.height - 120; width: parent.width - 66; height: 32
+            x: 0; y: parent.height - 120; width: parent.width; height: 32
             text: "Я соглашаюсь с пользовательским соглашением"
             indicator: Rectangle { x: 0; y: (agreement.height-height)/2; width: 20; height: 20; radius: 4; color: Theme.card; border.color: "#159cfa"
                 LegacyText { anchors.centerIn: parent; text: agreement.checked ? "✓" : ""; color: "#159cfa"; font.bold: true }
@@ -75,7 +73,7 @@ LegacyDialogWindow {
             onClicked: { if (dialog.mandatory) dialog.consentGiven(); dialog.acknowledged = true; dialog.mandatory = false; dialog.close() }
         }
         LegacyButton {
-            x: 33; y: parent.height - 69; height: 37; text: "Выйти"; link: true; visible: dialog.mandatory
+            x: 0; y: parent.height - 69; height: 37; text: "Выйти"; link: true; visible: dialog.mandatory
             onClicked: dialog.transientParent.close()
         }
     }

@@ -23,4 +23,7 @@ Result<void> restoreOriginal(const QString& game, const QString& backup, const C
 Result<std::vector<FileReplacement>> originalReceipt(const QString& game, const QString& backup, const Cancellation& cancel = {});
 Result<QString> findOriginalBackup(const QString& game, const QString& backupRoot, const Cancellation& cancel = {});
 Result<std::optional<QString>> recoverInstallation(const QString& game);
+Result<QByteArray> applyAddonDelta(QByteArrayView original, QByteArrayView delta);
+Result<InstallationResult> installLoadingScreensAddon(const QString& game, const QString& deltaPath, const QString& backupRoot,
+    const CommitGuard& guard, const Cancellation& cancel = {});
 }

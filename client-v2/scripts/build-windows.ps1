@@ -5,7 +5,7 @@ param(
     [string]$Cppcheck,
     [string]$BuildDirectory,
     [string]$InstallDirectory,
-    [string]$Version = '2.0.8',
+    [string]$Version = '2.1.1',
     [switch]$WithTests,
     [switch]$Benchmarks
 )

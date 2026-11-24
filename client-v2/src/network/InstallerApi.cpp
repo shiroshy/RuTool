@@ -27,7 +27,7 @@ Result<QJsonObject> InstallerApi::json(const QString& endpoint, const QByteArray
         return std::unexpected(networkError(QStringLiteral("Сетевую операцию нужно выполнять в рабочем потоке.")));
     const QStringList allowed{QStringLiteral("api/verify"), QStringLiteral("api/installer/releases/latest"),
         QStringLiteral("api/installer/premium/check"), QStringLiteral("api/installer/premium/releases"),
-        QStringLiteral("api/installer/installations"), QStringLiteral("api/installer/application/latest"), QStringLiteral("api/installer/application/candidate")};
+        QStringLiteral("api/installer/installations"), QStringLiteral("api/installer/application/v2/latest"), QStringLiteral("api/installer/application/v2/candidate")};
     if (!allowed.contains(endpoint) || body.size() > 16 * 1024) return std::unexpected(networkError(QStringLiteral("Недопустимый запрос API.")));
     if (cancel_ && cancel_->load()) return std::unexpected(Error{ErrorCode::Cancelled, QStringLiteral("Операция отменена.")});
     QNetworkRequest request(QUrl(QStringLiteral("https://bluehalo.site/") + endpoint));

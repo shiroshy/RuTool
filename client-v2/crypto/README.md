@@ -21,8 +21,9 @@ full private workspace, under ignored tests/. There, add -DBUILD_TESTING=ON
 when configuring and run ctest --test-dir build-crypto --output-on-failure.
 The public source archive does not require or include these private test files.
 
-Windows-specific installation, launching and DPAPI recovery journals are outside
-this module and still need a platform implementation for a native Linux installer.
+Installation, launching and protected recovery journals are outside this module.
+Windows and Linux implementations live in `src/platform/`; see
+[the Linux build guide](../BUILDING-LINUX.md).
 
 Mbed TLS upstream sources are unmodified in `third_party/mbedtls-3.6.7`.
 RuTool selects Apache-2.0 from its dual license; the upstream license is included

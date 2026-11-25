@@ -1,3 +1,4 @@
+#include <rutool/platform/Runtime.hpp>
 #include <rutool/core/Installation.hpp>
 #include <rutool/platform/FileOps.hpp>
 #include <QDir>
@@ -16,7 +17,7 @@ namespace rutool {
 namespace {
 Error invalid(const QString& text) { return {ErrorCode::InvalidInput, text}; }
 QString full(const QString& path) { return QDir::cleanPath(QFileInfo(path).absoluteFilePath()); }
-bool samePath(const QString& a, const QString& b) { return full(a).compare(full(b), Qt::CaseInsensitive) == 0; }
+bool samePath(const QString& a, const QString& b) { return full(a).compare(full(b), platform::pathCaseSensitivity) == 0; }
 std::vector<QString> targets(const QString& game, bool bundle) {
     std::vector<QString> result{gameDatabasePath(game)};
     if (bundle) { result.push_back(QFileInfo(result[0]).dir().filePath(QStringLiteral("Excel.zip"))); result.push_back(QDir(game).filePath(QStringLiteral("BlueArchive_Data/resources.assets"))); }
@@ -156,8 +157,11 @@ Result<QString> replace(std::vector<FileReplacement> files, const QString& backu
             auto current = exactHash(files[i].target, files[i].before, {});
         if (!current) return std::unexpected(current.error());
             auto changed = platform::replaceFile(staged[i], files[i].target);
-        if (!changed) return std::unexpected(changed.error());
+            // A failed replacement may already have changed the target (rename +
+            // failed fsync). Validate every attempted target during rollback;
+            // unknown/unreadable contents must keep the journal and backups.
             ++installed;
+            if (!changed) return std::unexpected(changed.error());
             auto after = exactHash(files[i].target, files[i].after, {});
         if (!after) return std::unexpected(after.error());
         }

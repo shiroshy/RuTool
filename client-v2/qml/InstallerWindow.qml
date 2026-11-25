@@ -15,6 +15,7 @@ ApplicationWindow {
     flags: Qt.Window | Qt.FramelessWindowHint
     color: Theme.color("#e6f3ff")
     font.family: "Segoe UI"; font.pixelSize: 15
+    readonly property bool linuxBuild: Qt.platform.os === "linux"
     property string statusOverride: ""
     readonly property bool packagePending: client.packagePending
     readonly property bool packageDownloading: client.packageDownloading
@@ -283,10 +284,17 @@ ApplicationWindow {
                         }
                     }
                 }
+                LegacyButton {
+                    objectName: "linuxUpdateButton"
+                    visible: window.linuxBuild
+                    text: "Обновление Linux"; link: true; font.pixelSize: 11
+                    enabled: !window.working
+                    onClicked: client.requestApplicationUpdate()
+                }
                 Item { Layout.fillWidth: true }
                 LegacyButton {
                     objectName: "applicationUpdateButton"
-                    visible: !!client.applicationUpdateVersion
+                    visible: !window.linuxBuild && !!client.applicationUpdateVersion
                     enabled: !window.working
                     font.pixelSize: 13
                     text: "Обновить до " + client.applicationUpdateVersion
@@ -525,7 +533,7 @@ ApplicationWindow {
                 LegacyButton {
                     objectName: "disclaimerButton"
                     Layout.preferredWidth: 30; Layout.preferredHeight: 30; chrome: true
-                    text: "ⓘ"
+                    text: window.linuxBuild ? "i" : "ⓘ"
                     font.pixelSize: 19
                     hint: "Открыть дисклеймер"
                     Accessible.name: hint

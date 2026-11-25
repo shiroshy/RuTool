@@ -36,7 +36,11 @@ void ServiceClient::request(Operation operation) {
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     request.setTransferTimeout(15000);
     request.setRawHeader("Accept", "application/json");
+#ifdef Q_OS_LINUX
+    request.setRawHeader("User-Agent", "RuTool/" RUTOOL_APP_VERSION " Linux");
+#else
     request.setRawHeader("User-Agent", "RuTool/2.0.0-dev Windows");
+#endif
     auto* reply = manager_->get(request); pending_.insert(id, reply);
     const qsizetype limit = operation == Operation::Health ? 4096 : operation == Operation::Content ? 384 * 1024 : 1024 * 1024;
     reply->setReadBufferSize(limit + 1);

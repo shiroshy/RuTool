@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=RuTool Installer
+Comment=Blue Archive translation installer
+Exec=RuTool
+Icon=rutool
+Terminal=false
+Categories=Game;Utility;

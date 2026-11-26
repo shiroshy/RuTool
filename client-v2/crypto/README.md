@@ -1,30 +1,26 @@
 # Portable installer cryptography
 
-Mbed TLS 3.6.7, statically linked with a minimal algorithm configuration:
-AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256 and ECDSA P-256 verification.
-`PortableCrypto` has no Qt or Windows API dependency. It preserves the RUT111
-parameters and the existing canonical SPKI / IEEE P1363 signature format.
-No TLS, persistent key storage, OS entropy adapters or CNG backends are enabled
-in this library. The application's Qt HTTPS backend is separate.
+The library uses Mbed TLS 3.6.7 for AES-256-GCM, PBKDF2-HMAC-SHA256,
+SHA-256 and ECDSA P-256 verification. It preserves the RUT111 parameters,
+canonical SPKI public keys and IEEE P1363 signatures.
 
-Build this module alone on Linux or Windows with CMake and a C++20
-compiler (no Qt installation required):
+It has no Qt or Windows API dependency. TLS, local key storage,
+installation and recovery journals are handled by the application.
+
+## Build
+
+Run from the application directory with CMake and a C++20 compiler:
 
 ```sh
 cmake -S crypto -B build-crypto -DCMAKE_BUILD_TYPE=Release
 cmake --build build-crypto
 ```
 
-Run from the `client-v2` directory. BUILD_TESTING defaults to OFF. Synthetic
-.NET/CNG interoperability vectors and the test runner are retained only in the
-full private workspace, under ignored tests/. There, add -DBUILD_TESTING=ON
-when configuring and run ctest --test-dir build-crypto --output-on-failure.
-The public source archive does not require or include these private test files.
+Standalone tests default to OFF. The public application tests cover the
+crypto adapter and package handling; see the [Linux build guide](../BUILDING-LINUX.md).
 
-Installation, launching and protected recovery journals are outside this module.
-Windows and Linux implementations live in `src/platform/`; see
-[the Linux build guide](../BUILDING-LINUX.md).
+## License
 
-Mbed TLS upstream sources are unmodified in `third_party/mbedtls-3.6.7`.
-RuTool selects Apache-2.0 from its dual license; the upstream license is included
-in the source tree and in the packaged application's third-party licenses.
+Mbed TLS sources are unmodified. RuTool uses the Apache-2.0 option of its
+dual license. The upstream license is included in the source distribution
+and in the packaged application's third-party notices.

@@ -1,6 +1,23 @@
 #!/bin/sh
 set -eu
 app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+# A previous AppImage may have selected a runtime before launching this one.
+# Recheck it against this bundle, preserving only the user's original preload.
+if [ "${RUTOOL_ORIGINAL_LD_PRELOAD+x}" = x ]; then
+    if [ -n "$RUTOOL_ORIGINAL_LD_PRELOAD" ]; then
+        export LD_PRELOAD="$RUTOOL_ORIGINAL_LD_PRELOAD"
+    else
+        unset LD_PRELOAD
+    fi
+    unset RUTOOL_ORIGINAL_LD_PRELOAD
+fi
+# Keep newer system Mesa/LLVM compatible with the C++ runtime in this process.
+# The probe itself must resolve the host runtime without the bundle's paths.
+if system_cpp=$(LD_LIBRARY_PATH= "$app_dir/usr/libexec/rutool/runtime-check" \
+    "$app_dir/usr/libexec/rutool/libstdc++.versions"); then
+    export RUTOOL_ORIGINAL_LD_PRELOAD="${LD_PRELOAD-}"
+    export LD_PRELOAD="$system_cpp${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
 # Remove host Qt module paths (especially NixOS wrapper variables) to avoid ABI mixing.
 unset QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH QML_IMPORT_PATH QML2_IMPORT_PATH QT_QUICK_CONTROLS_CONF
 export QT_PLUGIN_PATH="$app_dir/usr/plugins"

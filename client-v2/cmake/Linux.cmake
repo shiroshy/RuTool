@@ -1,4 +1,9 @@
 # Linux deployment and public regression checks. The Windows private suite is separate.
+add_executable(rutool_runtime_check packaging/linux/RuntimeCheck.c)
+set_target_properties(rutool_runtime_check PROPERTIES OUTPUT_NAME runtime-check C_STANDARD 11 C_STANDARD_REQUIRED ON)
+target_link_libraries(rutool_runtime_check PRIVATE ${CMAKE_DL_LIBS})
+rutool_quality(rutool_runtime_check)
+install(TARGETS rutool_runtime_check RUNTIME DESTINATION libexec/rutool)
 foreach(config_file update-public.der installer-keys.json)
     configure_file(config/${config_file} "${CMAKE_CURRENT_BINARY_DIR}/app/config/${config_file}" COPYONLY)
 endforeach()
@@ -9,6 +14,10 @@ install(FILES packaging/linux/rutool.desktop DESTINATION share/applications)
 install(FILES packaging/linux/rutool.svg DESTINATION share/icons/hicolor/scalable/apps)
 if(BUILD_TESTING)
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME linux_runtime_selection COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/linux-tests/RuntimeSelectionTests.py"
+        "$<TARGET_FILE:rutool_runtime_check>" "${CMAKE_CURRENT_SOURCE_DIR}/packaging/linux/AppRun" "${CMAKE_C_COMPILER}")
+    set_tests_properties(linux_runtime_selection PROPERTIES TIMEOUT 20)
     qt_add_executable(rutool_linux_tests linux-tests/LinuxTests.cpp)
     qt_add_executable(rutool_core_tests linux-tests/CoreTests.cpp)
     qt_add_executable(rutool_linux_update_tests linux-tests/LinuxUpdateTests.cpp)

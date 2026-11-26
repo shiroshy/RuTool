@@ -10,6 +10,7 @@ import sys
 root = Path(sys.argv[1]).resolve()
 errors = []
 required = ['AppRun', 'rutool.desktop', 'rutool.svg', 'usr/bin/RuTool',
+            'usr/libexec/rutool/runtime-check', 'usr/libexec/rutool/libstdc++.versions',
             'usr/bin/app/config/installer-keys.json',
             'usr/bin/app/config/update-public.der', 'usr/plugins/platforms/libqxcb.so',
             'usr/plugins/platforms/libqoffscreen.so', 'usr/qml/QtQuick/qmldir',

@@ -82,6 +82,18 @@ Libraries=lib
 Plugins=plugins
 QmlImports=qml
 QTCONF
+python3 - "$app_dir" <<'PY'
+from pathlib import Path
+import re
+import subprocess
+import sys
+root = Path(sys.argv[1])
+symbols = subprocess.check_output(['readelf', '--dyn-syms', '--wide', str(root/'usr/lib/libstdc++.so.6')], text=True)
+versions = sorted(set(re.findall(r'\bABS\s+((?:GLIBCXX|CXXABI)_[A-Za-z0-9_.]+)\s*$', symbols, re.M)))
+if not any(v.startswith('GLIBCXX_') for v in versions) or not any(v.startswith('CXXABI_') for v in versions):
+    sys.exit('C++ runtime ABI versions missing')
+(root/'usr/libexec/rutool/libstdc++.versions').write_text('\n'.join(versions) + '\n')
+PY
 python3 "$source_dir/scripts/check-appdir.py" "$app_dir"
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software "$app_dir/AppRun" --smoke-test --smoke-screenshot "$output_dir/appdir-smoke.png"
 cp -- "$tools_dir/SHA256SUMS" "$output_dir/deployment-tools.sha256"

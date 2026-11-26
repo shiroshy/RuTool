@@ -25,7 +25,7 @@ int main(int argc, char* argv[]) {
     app.setProperty("rutoolAppImageHash", startup.appImageHash);
     QCoreApplication::setApplicationName(startup.applicationName);
     QCoreApplication::setOrganizationName(QStringLiteral("RuTool"));
-    QCoreApplication::setApplicationVersion(QStringLiteral(RUTOOL_APP_VERSION));
+    QCoreApplication::setApplicationVersion(QStringLiteral(RUTOOL_APP_DISPLAY_VERSION));
     QCommandLineParser parser;
     parser.addHelpOption(); parser.addVersionOption();
     parser.addOption({QStringLiteral("smoke-test"), QStringLiteral("Load production QML offline with isolated temporary data, then exit.")});

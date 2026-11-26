@@ -141,6 +141,7 @@ void ClientController::setGameFolder(const QString& path) {
     if (operationalStarted_ && !gameFolder_.isEmpty()) saveOperations();
     const auto oldSettingsGame = operationalSettings_.value(QStringLiteral("GameFolder")).toString();
     gameFolder_ = normalized;
+    translationInstalled_ = false;
     if (operationalStarted_) {
         const auto key = rutool::platform::pathKey(QDir::fromNativeSeparators(QFileInfo(gameFolder_).absoluteFilePath()));
         const auto backups = operationalSettings_.value(QStringLiteral("GameBackups")).toObject();
@@ -157,6 +158,10 @@ void ClientController::setGameFolder(const QString& path) {
 }
 void ClientController::chooseGameFolder(const QUrl& url) {
     if (url.isLocalFile()) setGameFolder(QDir::toNativeSeparators(url.toLocalFile()));
+}
+void ClientController::refreshInstallationState() {
+    if (!operationalStarted_ || busy_ || restoreWatcher_.isRunning()) return;
+    refreshRestore();
 }
 void ClientController::logError(const QString& operation, const QString& code, const QString& message, const QString& details) {
     diagnostic_.record(operation, code, message, details); hasErrors_ = true; emit changed();

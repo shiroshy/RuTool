@@ -16,6 +16,7 @@ ApplicationWindow {
     color: Theme.color("#e6f3ff")
     font.family: "Segoe UI"; font.pixelSize: 15
     readonly property bool linuxBuild: Qt.platform.os === "linux"
+    onActiveChanged: if (active && linuxBuild) client.refreshInstallationState()
     property string statusOverride: ""
     readonly property bool packagePending: client.packagePending
     readonly property bool packageDownloading: client.packageDownloading
@@ -265,13 +266,14 @@ ApplicationWindow {
                 Rectangle {
                     objectName: "brandPlate"
                     Layout.preferredWidth: brand.implicitWidth + 24
-                    Layout.preferredHeight: 48
+                    Layout.preferredHeight: window.linuxBuild ? 62 : 48
                     radius: 7
                     color: Theme.color("#eaf6faff")
                     border.color: Theme.border
                     RowLayout {
                         id: brand
                         anchors.centerIn: parent
+                        anchors.verticalCenterOffset: window.linuxBuild ? -8 : 0
                         spacing: 10
                         Shape {
                             Layout.preferredWidth: 36
@@ -291,6 +293,16 @@ ApplicationWindow {
                             ToolTip.visible: mainContent.enabled && versionHover.hovered
                             ToolTip.text: "Версия установленной программы"
                         }
+                    }
+                    LegacyText {
+                        objectName: "linuxReadingTagline"
+                        visible: window.linuxBuild
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 4
+                        text: client.translationInstalled ? "Sensei, I Can Read!" : "Sensei, I Can't Read"
+                        color: Theme.muted
+                        font.pixelSize: 12
                     }
                 }
                 LegacyButton {

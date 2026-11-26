@@ -47,8 +47,8 @@ export EXTRA_QT_MODULES='svg;waylandclient'
 export EXTRA_PLATFORM_PLUGINS='libqoffscreen.so;libqwayland-egl.so;libqwayland-generic.so'
 export PATH="$deployment_dir/bin:$PATH"
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-1767225600}
-VERSION=$(sed -n 's/^CMAKE_PROJECT_VERSION:STATIC=//p' "$build_dir/CMakeCache.txt")
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Missing release version in CMake cache' >&2; exit 1; }
+VERSION=$(sed -n 's/^RUTOOL_APP_DISPLAY_VERSION:STRING=//p' "$build_dir/CMakeCache.txt")
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+L?$ ]] || { echo 'Missing release version in CMake cache' >&2; exit 1; }
 export ARCH=x86_64 VERSION
 # Dynamic plugins are not visible in the main ELF's DT_NEEDED entries.
 qt_plugins=$("$QMAKE" -query QT_INSTALL_PLUGINS)

@@ -7,6 +7,11 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QTemporaryDir>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QCryptographicHash>
+#include <QScopeGuard>
+#include <rutool/platform/Runtime.hpp>
 #include "ClientController.hpp"
 #include "UiState.hpp"
 
@@ -51,7 +56,7 @@ private slots:
         engine_->loadFromModule(QStringLiteral("RuTool.App"), QStringLiteral("Main"));
         QVERIFY(!engine_->rootObjects().isEmpty());
         window_ = qobject_cast<QQuickWindow*>(engine_->rootObjects().first()); QVERIFY(window_);
-        QVERIFY(window_->isVisible()); QCOMPARE(client_->applicationVersion(), QStringLiteral("2.1.1"));
+        QVERIFY(window_->isVisible()); QCOMPARE(client_->applicationVersion(), QStringLiteral(RUTOOL_APP_DISPLAY_VERSION));
     }
     void mandatoryAgreement() {
         auto* disclaimer = item("disclaimerWindow"); QVERIFY(disclaimer);
@@ -79,6 +84,76 @@ private slots:
         QVERIFY(render(QStringLiteral("settings-light")));
         QVERIFY(QMetaObject::invokeMethod(settings, "close"));
         QVERIFY(QTest::qWaitFor([&] { return !settings->property("visible").toBool(); }, 2000));
+    }
+    void linuxReadingTagline() {
+        auto* tagline = item("linuxReadingTagline"); QVERIFY(tagline);
+        QVERIFY(tagline->property("visible").toBool());
+        QCOMPARE(tagline->property("text").toString(), QStringLiteral("Sensei, I Can't Read"));
+        const auto game = data_.filePath(QStringLiteral("reading-game"));
+        const auto database = rutool::gameDatabasePath(game);
+        const QByteArray original("original fixture"), translated("Russian! fixture");
+        const auto hash = [](const QByteArray& bytes) {
+            return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+        };
+        const auto write = [](const QString& path, const QByteArray& bytes) {
+            if (!QDir().mkpath(QFileInfo(path).absolutePath())) return false;
+            QFile file(path);
+            return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+        };
+        const auto oldRoot = client_->dataRoot_;
+        const auto reset = qScopeGuard([&] {
+            client_->operationalStarted_ = false;
+            client_->operationalSettings_ = {};
+            client_->backupPath_.clear();
+            client_->dataRoot_ = oldRoot;
+            client_->setGameFolder({});
+        });
+        const auto check = [&](bool installed) {
+            QSignalSpy changed(client_.get(), &ClientController::changed);
+            client_->refreshRestore();
+            return QTest::qWaitFor([&] { return changed.count() > 0 && !client_->restoreWatcher_.isRunning(); }, 5000)
+                && client_->translationInstalled() == installed;
+        };
+        client_->dataRoot_ = data_.path();
+        QVERIFY(write(database, original));
+        client_->setGameFolder(game);
+        const auto key = rutool::platform::pathKey(game);
+        client_->operationalSettings_[QStringLiteral("InstalledTranslationHashes")] =
+            QJsonObject{{key, QJsonArray{hash(translated)}}};
+        QVERIFY(check(false));
+        QVERIFY(write(database, translated));
+        QVERIFY(check(true)); // Also works without an original backup.
+        QCOMPARE(tagline->property("text").toString(), QStringLiteral("Sensei, I Can Read!"));
+        QVERIFY(render(QStringLiteral("reading")));
+        client_->operationalStarted_ = true;
+        client_->saveOperations();
+        client_->operationalStarted_ = false;
+        QFile settings(data_.filePath(QStringLiteral("client-v2-settings.json")));
+        QVERIFY(settings.open(QIODevice::ReadOnly));
+        client_->operationalSettings_ = QJsonDocument::fromJson(settings.readAll()).object();
+        QVERIFY(check(true));
+        client_->setGameFolder(data_.filePath(QStringLiteral("another-game")));
+        QVERIFY(check(false));
+        client_->setGameFolder(game);
+        QVERIFY(check(true));
+        QVERIFY(write(database, "updated by Steam"));
+        QVERIFY(check(false));
+        QCOMPARE(tagline->property("text").toString(), QStringLiteral("Sensei, I Can't Read"));
+
+        // Old installations can be recognised through a verified backup receipt.
+        client_->operationalSettings_ = {};
+        const auto backup = data_.filePath(QStringLiteral("Backups/original.db"));
+        QVERIFY(write(backup, original));
+        const QJsonObject receipt{{QStringLiteral("FormatVersion"), 1}, {QStringLiteral("OriginalVerified"), true},
+            {QStringLiteral("Forced"), false}, {QStringLiteral("TargetPath"), database},
+            {QStringLiteral("BeforeSha256"), hash(original)}, {QStringLiteral("AfterSha256"), hash(translated)}};
+        QVERIFY(write(backup + QStringLiteral(".baretool-backup.json"), QJsonDocument(receipt).toJson()));
+        QVERIFY(write(database, translated));
+        QVERIFY(check(true));
+        QVERIFY(client_->canRestore());
+        QVERIFY(rutool::restoreOriginal(game, backup));
+        QVERIFY(check(false));
+        QCOMPARE(tagline->property("text").toString(), QStringLiteral("Sensei, I Can't Read"));
     }
     void catalogAndAddon() {
         auto* catalog = item("translationsWindow"); QVERIFY(catalog);

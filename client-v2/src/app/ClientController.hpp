@@ -32,6 +32,7 @@ class ClientController final : public QObject {
     Q_PROPERTY(QString gameFolder READ gameFolder WRITE setGameFolder NOTIFY changed)
     Q_PROPERTY(QString gameState READ gameState NOTIFY changed)
     Q_PROPERTY(bool gameValid READ gameValid NOTIFY changed)
+    Q_PROPERTY(bool translationInstalled READ translationInstalled NOTIFY changed)
     Q_PROPERTY(bool hasDiagnosticErrors READ hasDiagnosticErrors NOTIFY changed)
     Q_PROPERTY(bool exportingLog READ exportingLog NOTIFY changed)
     Q_PROPERTY(bool checkingAttachments READ checkingAttachments NOTIFY changed)
@@ -77,6 +78,8 @@ public:
     const QString& gameFolder() const { return gameFolder_; }
     QString gameState() const;
     bool gameValid() const { return gameValid_; }
+    bool translationInstalled() const { return translationInstalled_; }
+    Q_INVOKABLE void refreshInstallationState();
     void setGameFolder(const QString& path);
     bool hasDiagnosticErrors() const { return hasErrors_; }
     bool exportingLog() const { return exportWatcher_.isRunning(); }
@@ -124,7 +127,7 @@ public:
     QString packageSigner() const { return session_ ? session_->package.signature.value(QStringLiteral("SignerId")).toString() : QString{}; }
     QString packageKind() const { return session_ ? session_->package.bundle ? QStringLiteral("Общий пакет") : QStringLiteral("База данных") : QStringLiteral("Не проверен"); }
     QString applicationUpdateVersion() const { return linuxApplicationRelease_ ? linuxApplicationRelease_->version : applicationRelease_ ? applicationRelease_->version : QString{}; }
-    QString applicationVersion() const { return QStringLiteral(RUTOOL_APP_VERSION); }
+    QString applicationVersion() const { return QStringLiteral(RUTOOL_APP_DISPLAY_VERSION); }
     Q_INVOKABLE void checkApplicationUpdate(bool candidate = false);
     Q_INVOKABLE void requestApplicationUpdate();
     Q_INVOKABLE void chooseApplicationUpdateDestination(const QUrl& url);
@@ -138,11 +141,12 @@ signals:
     void applicationUpdateLocationRequested(const QUrl& suggested);
 private:
     friend class ControllerTests;
+    friend class UiTests;
     enum class PackagePhase { Idle, Downloading, Checking };
     struct Session { std::shared_ptr<QTemporaryDir> staging; rutool::PreparedPackage package; bool official{}, originalVerified{}, ownedDownload{}; QString trustDetail; std::shared_ptr<rutool::platform::FileLock> downloadLease; };
-    struct Work { std::shared_ptr<Session> session; QString status, backup; bool installed{}, restored{}; std::vector<QString> mismatch; QString helper{}, plan{}; std::shared_ptr<rutool::platform::FileLock> helperLock{}, cacheLease{}; QStringList helperArguments{}; };
+    struct Work { std::shared_ptr<Session> session; QString status, backup; bool installed{}, restored{}; std::vector<QString> mismatch; QString helper{}, plan{}; std::shared_ptr<rutool::platform::FileLock> helperLock{}, cacheLease{}; QStringList helperArguments{}; std::vector<QString> installedHashes{}; };
     struct UpdateInfo { std::optional<rutool::ApplicationRelease> release; QByteArray envelope; std::optional<rutool::LinuxRelease> linuxRelease{}; qint64 channelSequence{}; QString channelId{}; };
-    struct RestoreWork { bool available{}; std::optional<QString> recoveredBackup; };
+    struct RestoreWork { bool available{}; std::optional<QString> recoveredBackup; bool translated{}; };
     void initializeOperationsConnections();
     void initializePremiumConnections();
     void startPremium();
@@ -187,6 +191,7 @@ private:
     bool operationalStarted_{};
     bool countRegistering_{};
     bool restoreAvailable_{};
+    bool translationInstalled_{};
     bool restoreAgain_{};
     bool cancellable_{true};
     bool installingUnverified_{};

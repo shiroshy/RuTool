@@ -75,6 +75,14 @@ void ClientController::initializeOperationsConnections() {
                 askConfirmation(2, QStringLiteral("Версии файлов не совпадают"), QStringLiteral("Файлы игры отличаются от версии, для которой подготовлен перевод. Принудительная установка может не работать после обновления игры. Изменённые файлы не попадут в резервные копии оригинала. Продолжить?"));
             }
             if (result->installed || result->restored) {
+                auto translations = operationalSettings_.value(QStringLiteral("InstalledTranslationHashes")).toObject();
+                const auto gameKey = rutool::platform::pathKey(QDir::fromNativeSeparators(QFileInfo(gameFolder_).absoluteFilePath()));
+                if (result->installed) {
+                    QJsonArray hashes;
+                    for (const auto& hash : result->installedHashes) hashes.append(hash);
+                    translations[gameKey] = hashes;
+                } else translations.remove(gameKey);
+                operationalSettings_[QStringLiteral("InstalledTranslationHashes")] = translations;
                 backupPath_ = result->backup; operationalSettings_[QStringLiteral("BackupPath")] = backupPath_;
                 if (result->installed && !operationalSettings_.value(QStringLiteral("InstallationRegistered")).toBool()) operationalSettings_[QStringLiteral("InstallationPending")] = true;
                 operationalSettings_[QStringLiteral("PackagePath")] = QString{}; if (session_) session_->downloadLease.reset(); session_.reset(); selectedDownloadLease_.reset(); packagePath_.clear(); packageName_.clear(); packageHash_.clear();
@@ -105,8 +113,9 @@ void ClientController::initializeOperationsConnections() {
             const auto result = restoreWatcher_.result();
             if (result) {
                 restoreAvailable_ = result->available;
+                translationInstalled_ = result->translated;
                 if (result->recoveredBackup) { backupPath_ = *result->recoveredBackup; operationalSettings_[QStringLiteral("BackupPath")] = backupPath_; saveOperations(); }
-            } else { restoreAvailable_ = false; operationStatus_ = result.error().message; logError(QStringLiteral("Recovery"), QStringLiteral("IO"), result.error().message, result.error().details); }
+            } else { restoreAvailable_ = false; translationInstalled_ = false; operationStatus_ = result.error().message; logError(QStringLiteral("Recovery"), QStringLiteral("IO"), result.error().message, result.error().details); }
         }
         emit changed();
     });
@@ -224,7 +233,16 @@ void ClientController::refreshCount() {
 void ClientController::refreshRestore() {
     if (restoreWatcher_.isRunning()) { restoreAgain_ = true; restoreAvailable_ = false; return; }
     const auto game = gameFolder_, backup = backupPath_, backupRoot = QDir(dataRoot_).filePath(QStringLiteral("Backups")); const auto cancel = lifetime_; restoreAvailable_ = false;
-    restoreWatcher_.setFuture(QtConcurrent::run([game, backup, backupRoot, cancel]() -> rutool::Result<RestoreWork> {
+    const auto gameKey = rutool::platform::pathKey(QDir::fromNativeSeparators(QFileInfo(game).absoluteFilePath()));
+    const auto saved = operationalSettings_.value(QStringLiteral("InstalledTranslationHashes")).toObject().value(gameKey).toArray();
+    std::vector<QString> expected;
+    if (saved.size() == 1 || saved.size() == 3) {
+        for (const auto& hash : saved) {
+            if (!rutool::isHash(hash.toString())) { expected.clear(); break; }
+            expected.push_back(hash.toString());
+        }
+    }
+    restoreWatcher_.setFuture(QtConcurrent::run([game, backup, backupRoot, cancel, expected]() -> rutool::Result<RestoreWork> {
         if (game.isEmpty()) return RestoreWork{};
         auto recovered = rutool::recoverInstallation(game); if (!recovered) return std::unexpected(recovered.error());
         auto selected = recovered->has_value() ? **recovered : backup;
@@ -232,7 +250,12 @@ void ClientController::refreshRestore() {
             auto discovered = rutool::findOriginalBackup(game, backupRoot, cancel); if (!discovered) return std::unexpected(discovered.error());
             selected = *discovered;
         }
-        return RestoreWork{!selected.isEmpty(), std::optional<QString>{selected}};
+        bool translated = !selected.isEmpty();
+        if (!translated && !expected.empty()) {
+            const auto current = rutool::installationHashes(game, expected.size() == 3, cancel);
+            translated = current && *current == expected;
+        }
+        return RestoreWork{!selected.isEmpty(), std::optional<QString>{selected}, translated};
     }));
 }
 void ClientController::loadCatalog() {
@@ -350,7 +373,9 @@ void ClientController::runInstall(bool unverified, std::vector<QString> approved
         auto installed = rutool::installPackage(request, []() -> rutool::Result<void> { return {}; }, cancel);
         if (!installed) return std::unexpected(installed.error());
         if (session->ownedDownload) QFile::remove(session->package.source);
-        return Work{{}, installed->alreadyInstalled ? QStringLiteral("Этот перевод уже установлен. Файлы игры не изменены.") : installed->originalBackup.isEmpty() ? QStringLiteral("Перевод установлен. Для возврата оригинала используйте проверку Steam.") : QStringLiteral("Перевод установлен. Исходная копия сохранена."), installed->originalBackup, true, false, {}};
+        Work result{{}, installed->alreadyInstalled ? QStringLiteral("Этот перевод уже установлен. Файлы игры не изменены.") : installed->originalBackup.isEmpty() ? QStringLiteral("Перевод установлен. Для возврата оригинала используйте проверку Steam.") : QStringLiteral("Перевод установлен. Исходная копия сохранена."), installed->originalBackup, true, false, {}};
+        result.installedHashes = std::move(patched);
+        return result;
     }));
 }
 void ClientController::restoreFiles() { if (canRestore()) askConfirmation(3, QStringLiteral("Восстановление"), QStringLiteral("Восстановить подтверждённые исходные файлы игры?")); }

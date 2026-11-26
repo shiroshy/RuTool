@@ -7,7 +7,7 @@ LegacyDialogWindow {
     id: dialog
     objectName: "reportWindow"; dock: "left"
     panelWidth: 570
-    title: "Сообщить о проблеме · RuTool"
+    title: Qt.platform.os === "linux" ? "Сообщить о проблеме · RuTool Linux" : "Сообщить о проблеме · RuTool"
     caption: "Сообщить о проблеме"
     wash: Theme.color("#f6faff")
     backdropOpacity: 0.24
@@ -48,7 +48,7 @@ LegacyDialogWindow {
             Item {
             id: form; objectName: "reportForm"; enabled: !client.sendingReport; width: formScroll.width - 16; height: Math.max(629, formScroll.height)
             LegacyText { text: "Расскажите, что случилось"; font.pixelSize: 22; font.bold: true }
-            LegacyText { y: 34; width: parent.width; text: "Опишите ошибку и при необходимости приложите скриншоты."; font.pixelSize: 14; color: Theme.color("#637fa4"); wrapMode: Text.WordWrap }
+            LegacyText { y: 34; width: parent.width; text: Qt.platform.os === "linux" ? "Сообщение будет помечено [Linux]. Можно приложить скриншоты." : "Опишите ошибку и при необходимости приложите скриншоты."; font.pixelSize: 14; color: Theme.color("#637fa4"); wrapMode: Text.WordWrap }
             LegacyText { y: 69; text: "Выберите тему"; font.pixelSize: 14; font.weight: Font.DemiBold }
             ComboBox {
                 id: topic; objectName: "reportTopic"; y: 96; width: parent.width; height: 40
@@ -62,7 +62,7 @@ LegacyDialogWindow {
                 popup: Popup { y: topic.height; width: topic.width; padding: 2; implicitHeight: Math.min(contentItem.implicitHeight + 4, 250); contentItem: ListView { clip: true; implicitHeight: contentHeight; model: topic.popup.visible ? topic.delegateModel : null; currentIndex: topic.highlightedIndex; ScrollIndicator.vertical: ScrollIndicator {} } background: Rectangle { radius: 6; color: Theme.color("#f7fcff"); border.color: Theme.color("#9bc6eb") } }
             }
             LegacyText { y: 153; text: "Текст сообщения"; font.pixelSize: 14; font.weight: Font.DemiBold }
-            LegacyText { y: 153; anchors.right: parent.right; text: Copy.codePointLength(message.text) + " / 400"; color: Theme.color("#6582aa"); font.pixelSize: 14 }
+            LegacyText { y: 153; anchors.right: parent.right; text: Copy.codePointLength(message.text) + " / " + client.reportTextLimit; color: Theme.color("#6582aa"); font.pixelSize: 14 }
             ScrollView {
                 id: messageScroll; objectName: "reportMessageScroll"
                 y: 180; width: parent.width; height: 128
@@ -75,7 +75,7 @@ LegacyDialogWindow {
                     width: messageScroll.width
                     padding: 12; rightPadding: 24; wrapMode: TextEdit.Wrap; selectByMouse: true
                     text: ""
-                    onTextChanged: if (Copy.codePointLength(text) > 400) text = Copy.limitCodePoints(text, 400)
+                    onTextChanged: if (Copy.codePointLength(text) > client.reportTextLimit) text = Copy.limitCodePoints(text, client.reportTextLimit)
                     background: null
                 }
             }

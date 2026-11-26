@@ -92,6 +92,7 @@ python3 - "$output_dir/RuTool-$VERSION-x86_64.AppImage" <<'PY'
 from pathlib import Path
 import subprocess
 import sys
+import re
 path = Path(sys.argv[1])
 with path.open('rb') as stream:
     import struct
@@ -103,6 +104,9 @@ with path.open('rb') as stream:
     assert stream.read(4) == b'hsqs', 'Missing SquashFS payload'
 metadata = subprocess.check_output(['readelf', '-lWd', str(path)], text=True)
 assert '/nix/store/' not in metadata, 'Nix dependency in runtime'
+versions = subprocess.check_output(['readelf', '--version-info', '-W', str(path)], text=True)
+assert all(tuple(map(int, version.split('.'))) <= (2, 35)
+           for version in re.findall(r'\bGLIBC_(\d+\.\d+(?:\.\d+)?)\b', versions)), 'Runtime requires glibc newer than 2.35'
 print('AppImage: x86_64, Type 2, SquashFS payload, no Nix runtime dependency')
 PY
 python3 "$source_dir/scripts/extract-appimage.py" "$output_dir/RuTool-$VERSION-x86_64.AppImage" "$output_dir/squashfs-root"

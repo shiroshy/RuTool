@@ -177,16 +177,24 @@ Result<void> validateReportAttachments(const QList<QUrl>& attachments) {
     }
     return {};
 }
+QString reportPlatformPrefix() {
+#ifdef Q_OS_LINUX
+    return QStringLiteral("[Linux]\n");
+#else
+    return {};
+#endif
+}
+int reportTextLimit() { return 400 - static_cast<int>(reportPlatformPrefix().toUcs4().size()); }
 Result<ReportResponse> sendReport(const ReportRequest& request, const Cancellation& cancel, QNetworkAccessManager* transport) {
     const QStringList topics{QStringLiteral("Общий вопрос"), QStringLiteral("Ошибки в переводе"), QStringLiteral("Ошибки в интерфейсе программы"), QStringLiteral("Техническая проблема"), QStringLiteral("Предложение об улучшении")};
     static const QRegularExpression uuidN(QStringLiteral("^[0-9a-fA-F]{32}$"));
-    if (!uuidN.match(request.clientId).hasMatch() || request.text.trimmed().isEmpty() || request.text.toUcs4().size() > 400 || request.username.toUcs4().size() > 64 || !topics.contains(request.topic) || request.attachments.size() > 10)
+    if (!uuidN.match(request.clientId).hasMatch() || request.text.trimmed().isEmpty() || request.text.toUcs4().size() > reportTextLimit() || request.username.toUcs4().size() > 64 || !topics.contains(request.topic) || request.attachments.size() > 10)
         return std::unexpected(error(QStringLiteral("Проверьте тему, текст и контакт репорта.")));
     for (const auto& c : request.username) if (c.category() == QChar::Other_Control) return std::unexpected(error(QStringLiteral("Недопустимый символ в контакте.")));
     auto attachments = validateReportAttachments(request.attachments); if (!attachments) return std::unexpected(attachments.error());
     QNetworkAccessManager defaultTransport; auto& manager = transport ? *transport : defaultTransport; QHttpMultiPart form(QHttpMultiPart::FormDataType);
     const auto field = [&form](const QByteArray& name, const QString& value) { QHttpPart part; part.setHeader(QNetworkRequest::ContentDispositionHeader, QStringLiteral("form-data; name=\"%1\"").arg(QString::fromLatin1(name))); part.setBody(value.toUtf8()); form.append(part); };
-    field("clientId", request.clientId); field("username", request.username); field("text", request.text); field("topic", request.topic);
+    field("clientId", request.clientId); field("username", request.username); field("text", reportPlatformPrefix() + request.text); field("topic", request.topic);
     qint64 total{}; std::vector<std::unique_ptr<QFile>> files;
     const QMap<QString, QString> types{{QStringLiteral("png"), QStringLiteral("image/png")}, {QStringLiteral("jpg"), QStringLiteral("image/jpeg")}, {QStringLiteral("jpeg"), QStringLiteral("image/jpeg")},
         {QStringLiteral("webp"), QStringLiteral("image/webp")}, {QStringLiteral("gif"), QStringLiteral("image/gif")}, {QStringLiteral("bmp"), QStringLiteral("image/bmp")},

@@ -81,10 +81,11 @@ Result<void> requireFreeSpace(const std::vector<std::pair<QString, quint64>>& wr
     }
     return {};
 }
-Result<void> replaceFile(const QString& staged, const QString& target) {
+ReplacementResult replaceFile(const QString& staged, const QString& target) {
     const auto source = QDir::toNativeSeparators(staged), destination = QDir::toNativeSeparators(target);
     if (!ReplaceFileW(wide(apiPath(destination)), wide(apiPath(source)), nullptr, 0, nullptr, nullptr))
-        return std::unexpected(io(QStringLiteral("Не удалось атомарно заменить файл игры.")));
+        return std::unexpected(ReplacementError{ReplacementState::Unknown,
+            io(QStringLiteral("Не удалось атомарно заменить файл игры."))});
     return {};
 }
 Result<qint64> currentProcessStartedTicks() {

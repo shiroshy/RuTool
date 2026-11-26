@@ -80,6 +80,11 @@ void ClientController::refreshServices() {
     emit changed(); services_.checkHealth(); services_.checkApplicationRelease();
 }
 void ClientController::refreshContent() { if (!QCoreApplication::instance()->property("rutoolSmokeTest").toBool()) services_.checkClientContent(); }
+void ClientController::chooseApplicationUpdateDestination(const QUrl& url) {
+    if (busy_ || !url.isLocalFile()) return;
+    applicationUpdateDestination_ = url.toLocalFile();
+    requestApplicationUpdate();
+}
 void ClientController::inspectPackage(const QUrl& url) {
     if (busy_) return;
     const auto path = url.toLocalFile();

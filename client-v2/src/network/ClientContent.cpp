@@ -3,7 +3,29 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QCryptographicHash>
+#include <utility>
 namespace rutool {
+namespace {
+QVariantList platformCredits(QVariantList entries) {
+#ifdef Q_OS_LINUX
+    const auto role = QStringLiteral("Разработчик Linux-версии");
+    const auto name = QStringLiteral("tskitsune");
+    for (qsizetype i = entries.size(); i > 0; --i) {
+        const auto entry = entries[i - 1].toMap();
+        if (entry.value(QStringLiteral("role")).toString() == role && entry.value(QStringLiteral("name")).toString() == name)
+            entries.removeAt(i - 1);
+    }
+    qsizetype position = entries.isEmpty() ? 0 : 1;
+    for (qsizetype i = 0; i < entries.size(); ++i) {
+        if (entries[i].toMap().value(QStringLiteral("name")).toString().trimmed().compare(QStringLiteral("Shizuka"), Qt::CaseInsensitive) == 0) {
+            position = i + 1; break;
+        }
+    }
+    entries.insert(position, QVariantMap{{QStringLiteral("role"), role}, {QStringLiteral("name"), name}});
+#endif
+    return entries;
+}
+}
 QVariantList defaultCredits() {
     QVariantList entries;
     for (const auto& pair : {std::pair{QStringLiteral("Кодер, автор, редактор"), QStringLiteral("Shizuka")},
@@ -12,7 +34,7 @@ QVariantList defaultCredits() {
          std::pair{QStringLiteral("Редактор"), QStringLiteral("Kostya")},
          std::pair{QStringLiteral("Редактор"), QStringLiteral("Magnisimus")}})
         entries.append(QVariantMap{{QStringLiteral("role"), pair.first}, {QStringLiteral("name"), pair.second}});
-    return entries;
+    return platformCredits(std::move(entries));
 }
 Result<ClientContent> parseClientContent(const QByteArray& json) {
     const auto invalid = [] { return std::unexpected(Error{ErrorCode::InvalidInput, QStringLiteral("Некорректное содержимое RuTool")}); };
@@ -45,6 +67,7 @@ Result<ClientContent> parseClientContent(const QByteArray& json) {
             content.credits.append(QVariantMap{{QStringLiteral("role"), role.toString()}, {QStringLiteral("name"), name.toString()}});
         }
     }
+    content.credits = platformCredits(std::move(content.credits));
     return content;
 }
 }

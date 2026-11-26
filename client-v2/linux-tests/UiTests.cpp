@@ -67,7 +67,7 @@ private slots:
         QVERIFY(item("linuxUpdateButton"));
         QVERIFY(!item("applicationUpdateButton")->property("visible").toBool());
         client_->requestApplicationUpdate(); QVERIFY(!client_->busy());
-        QCOMPARE(client_->operationStatus(), QStringLiteral("Для обновления Linux-версии замените AppImage вручную."));
+        QCOMPARE(client_->operationStatus(), QStringLiteral("Проверка обновлений отключена в режиме проверки интерфейса."));
         QVERIFY(click("settingsButton"));
         auto* settings = item("settingsWindow"); QVERIFY(settings);
         QVERIFY(QTest::qWaitFor([&] { return settings->property("visible").toBool(); }, 2000));

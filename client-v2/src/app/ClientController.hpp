@@ -7,6 +7,7 @@
 #include <rutool/core/Installation.hpp>
 #include <rutool/network/Transfers.hpp>
 #include <rutool/network/Premium.hpp>
+#include <rutool/releases/LinuxRelease.hpp>
 #include <rutool/core/InstallerConfig.hpp>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -36,6 +37,7 @@ class ClientController final : public QObject {
     Q_PROPERTY(bool checkingAttachments READ checkingAttachments NOTIFY changed)
     Q_PROPERTY(QString faqText READ faqText NOTIFY contentChanged)
     Q_PROPERTY(QVariantList credits READ credits NOTIFY contentChanged)
+    Q_PROPERTY(int reportTextLimit READ reportTextLimit CONSTANT)
     Q_PROPERTY(QString licenseText READ licenseText NOTIFY contentChanged)
     Q_PROPERTY(QString licenseHash READ licenseHash NOTIFY contentChanged)
     Q_PROPERTY(bool canInstall READ canInstall NOTIFY changed)
@@ -85,6 +87,7 @@ public:
     Q_INVOKABLE void refreshContent();
     const QString& faqText() const { return faqText_; }
     const QVariantList& credits() const { return credits_; }
+    int reportTextLimit() const { return rutool::reportTextLimit(); }
     const QString& licenseText() const { return licenseText_; }
     const QString& licenseHash() const { return licenseHash_; }
     Q_INVOKABLE void inspectPackage(const QUrl& url);
@@ -120,10 +123,11 @@ public:
     bool officialPackage() const { return session_ && session_->official; }
     QString packageSigner() const { return session_ ? session_->package.signature.value(QStringLiteral("SignerId")).toString() : QString{}; }
     QString packageKind() const { return session_ ? session_->package.bundle ? QStringLiteral("Общий пакет") : QStringLiteral("База данных") : QStringLiteral("Не проверен"); }
-    QString applicationUpdateVersion() const { return applicationRelease_ ? applicationRelease_->version : QString{}; }
+    QString applicationUpdateVersion() const { return linuxApplicationRelease_ ? linuxApplicationRelease_->version : applicationRelease_ ? applicationRelease_->version : QString{}; }
     QString applicationVersion() const { return QStringLiteral(RUTOOL_APP_VERSION); }
     Q_INVOKABLE void checkApplicationUpdate(bool candidate = false);
     Q_INVOKABLE void requestApplicationUpdate();
+    Q_INVOKABLE void chooseApplicationUpdateDestination(const QUrl& url);
 signals:
     void changed();
     void contentChanged();
@@ -131,12 +135,13 @@ signals:
     void reportAttachmentsChecked(const QList<QUrl>& urls, bool ok, const QString& message);
     void confirmationRequested(const QString& token, const QString& heading, const QString& message);
     void reportSent(bool accepted, const QString& message);
+    void applicationUpdateLocationRequested(const QUrl& suggested);
 private:
     friend class ControllerTests;
     enum class PackagePhase { Idle, Downloading, Checking };
     struct Session { std::shared_ptr<QTemporaryDir> staging; rutool::PreparedPackage package; bool official{}, originalVerified{}, ownedDownload{}; QString trustDetail; std::shared_ptr<rutool::platform::FileLock> downloadLease; };
-    struct Work { std::shared_ptr<Session> session; QString status, backup; bool installed{}, restored{}; std::vector<QString> mismatch; QString helper{}, plan{}; std::shared_ptr<rutool::platform::FileLock> helperLock{}, cacheLease{}; };
-    struct UpdateInfo { std::optional<rutool::ApplicationRelease> release; QByteArray envelope; };
+    struct Work { std::shared_ptr<Session> session; QString status, backup; bool installed{}, restored{}; std::vector<QString> mismatch; QString helper{}, plan{}; std::shared_ptr<rutool::platform::FileLock> helperLock{}, cacheLease{}; QStringList helperArguments{}; };
+    struct UpdateInfo { std::optional<rutool::ApplicationRelease> release; QByteArray envelope; std::optional<rutool::LinuxRelease> linuxRelease{}; qint64 channelSequence{}; QString channelId{}; };
     struct RestoreWork { bool available{}; std::optional<QString> recoveredBackup; };
     void initializeOperationsConnections();
     void initializePremiumConnections();
@@ -188,6 +193,8 @@ private:
     QVariantMap primaryRelease_;
     std::optional<rutool::TranslationRelease> latestTranslation_;
     std::optional<rutool::ApplicationRelease> applicationRelease_;
+    std::optional<rutool::LinuxRelease> linuxApplicationRelease_;
+    QString applicationUpdateDestination_;
     QByteArray applicationEnvelope_;
     QString operationStatus_;
     QString installationCount_{QStringLiteral("—")};

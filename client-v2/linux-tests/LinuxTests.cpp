@@ -3,46 +3,86 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QProcess>
-#include <QStandardPaths>
 #include <QScopeGuard>
 #include <QCryptographicHash>
-#include <QtEndian>
 #include <rutool/platform/Runtime.hpp>
 #include <rutool/platform/FileOps.hpp>
 #include <rutool/platform/Crypto.hpp>
-#include <rutool/security/Signatures.hpp>
 #include <rutool/core/Installation.hpp>
 #include <rutool/core/InstallerConfig.hpp>
-#include <rutool/network/Transfers.hpp>
-#include <rutool/network/ServiceClient.hpp>
-#include <rutool/network/Premium.hpp>
-#include "PortableCrypto.hpp"
+#include <rutool/platform/AppImageUpdates.hpp>
+#include "TestFiles.hpp"
+#include "TestNetwork.hpp"
+#include "TestImages.hpp"
 #include <sys/stat.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <fcntl.h>
 #include <cerrno>
-#include <QNetworkReply>
 #include <QTimer>
 #include <cstring>
 #include <unistd.h>
 
-// Fault injection for the durability boundary after a successful rename.
-// The production executable never links this test override.
+// Linux faults and process fixtures stay out of the shared workflow tests.
+// Neither the application nor CoreTests links these syscall overrides.
 namespace {
 thread_local const char* syncFailureTarget{};
+thread_local const char* syncFailurePrefix{"translat"};
+thread_local off_t syncFailureOffset{};
 thread_local bool corruptAfterRename{};
 thread_local bool crashAfterRename{};
+thread_local const char* syncFailureFile{};
+thread_local const char* renameFailureName{};
+thread_local bool renameBeforeFailure{};
+thread_local const char* changeBeforeCommit{};
+thread_local const char* failCommitJournalTarget{};
 }
 extern "C" int fsync(int fd) {
+    if (failCommitJournalTarget) {
+        const auto journal = QByteArray(failCommitJournalTarget) + ".baretool-transaction.dpapi";
+        struct stat actual{}, expected{};
+        if (::fstat(fd, &actual) == 0 && ::stat(journal.constData(), &expected) == 0 &&
+            actual.st_dev == expected.st_dev && actual.st_ino == expected.st_ino) {
+            const int target = ::open(failCommitJournalTarget, O_RDONLY | O_CLOEXEC);
+            char prefix[8]{};
+            const auto count = target >= 0 ? ::read(target, prefix, sizeof(prefix)) : -1;
+            if (target >= 0) ::close(target);
+            if (count == 8 && std::memcmp(prefix, "translat", 8) == 0) {
+                failCommitJournalTarget = nullptr;
+                // Also interrupt rollback after it restores the original bytes.
+                renameFailureName = "ExcelDB.db"; renameBeforeFailure = true;
+                errno = EIO; return -1;
+            }
+        }
+    }
+    if (changeBeforeCommit) {
+        const auto journal = QByteArray(changeBeforeCommit) + ".baretool-transaction.dpapi";
+        if (::access(journal.constData(), F_OK) == 0) {
+            const int changed = ::open(changeBeforeCommit, O_WRONLY | O_TRUNC | O_CLOEXEC);
+            changeBeforeCommit = nullptr;
+            if (changed >= 0) {
+                const auto written = ::write(changed, "unknown contents", 16);
+                ::close(changed);
+                if (written != 16) return -1;
+            }
+        }
+    }
+    if (syncFailureFile) {
+        struct stat actual{}, expected{};
+        if (::fstat(fd, &actual) == 0 && ::stat(syncFailureFile, &expected) == 0 &&
+            actual.st_dev == expected.st_dev && actual.st_ino == expected.st_ino) {
+            syncFailureFile = nullptr; errno = EIO; return -1;
+        }
+    }
     if (syncFailureTarget) {
         struct stat info{};
         if (::fstat(fd, &info) == 0 && S_ISDIR(info.st_mode)) {
             const int targetFd = ::open(syncFailureTarget, O_RDONLY | O_CLOEXEC);
+            if (targetFd >= 0 && syncFailureOffset) ::lseek(targetFd, syncFailureOffset, SEEK_SET);
             char prefix[8]{};
             const auto count = targetFd >= 0 ? ::read(targetFd, prefix, sizeof(prefix)) : -1;
             if (targetFd >= 0) ::close(targetFd);
-            if (count == 8 && std::memcmp(prefix, "translat", 8) == 0) {
+            if (count == 8 && std::memcmp(prefix, syncFailurePrefix, 8) == 0) {
                 if (crashAfterRename) ::_exit(77);
                 if (corruptAfterRename) {
                     const int changed = ::open(syncFailureTarget, O_WRONLY | O_TRUNC | O_CLOEXEC);
@@ -58,60 +98,47 @@ extern "C" int fsync(int fd) {
     }
     return static_cast<int>(::syscall(SYS_fsync, fd));
 }
+extern "C" int renameat(int from, const char* source, int to, const char* target) {
+    if (renameFailureName && std::strcmp(target, renameFailureName) == 0) {
+        renameFailureName = nullptr;
+        if (renameBeforeFailure && ::syscall(SYS_renameat, from, source, to, target) != 0) return -1;
+        errno = EIO; return -1;
+    }
+    return static_cast<int>(::syscall(SYS_renameat, from, source, to, target));
+}
 using namespace rutool;
-namespace {
-QByteArray read(const QString& path) { QFile f(path); return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray{}; }
-bool write(const QString& path, const QByteArray& bytes) {
-    if (!QDir().mkpath(QFileInfo(path).absolutePath())) return false;
-    QFile f(path); return f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size();
-}
-QString fixture(const char* name) { return QDir(QStringLiteral(RUTOOL_LINUX_FIXTURES)).filePath(QString::fromLatin1(name)); }
-crypto::Bytes view(const QByteArray& bytes) { return {reinterpret_cast<const unsigned char*>(bytes.constData()), static_cast<size_t>(bytes.size())}; }
-}
-class FixtureReply final : public QNetworkReply {
-    QByteArray body_;
-    qint64 offset_{};
-public:
-    FixtureReply(const QNetworkRequest& request, QByteArray body, int status, bool badRange, QObject* parent)
-        : QNetworkReply(parent), body_(std::move(body)) {
-        setRequest(request); setUrl(request.url()); open(QIODevice::ReadOnly);
-        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, status);
-        setHeader(QNetworkRequest::ContentLengthHeader, body_.size());
-        if (status == 302) setAttribute(QNetworkRequest::RedirectionTargetAttribute, QUrl(QStringLiteral("https://evil.invalid/file")));
-        if (status == 206) setRawHeader("Content-Range", badRange ? QByteArray("invalid") : QByteArray("bytes 3-") + QByteArray::number(body_.size() + 2) + '/' + QByteArray::number(body_.size() + 3));
-        QTimer::singleShot(0, this, [this] {
-            emit metaDataChanged();
-            if (isFinished()) return;
-            emit readyRead();
-            if (isFinished()) return;
-            setFinished(true); emit finished();
-        });
-    }
-    void abort() override { if (!isFinished()) { setError(OperationCanceledError, QStringLiteral("aborted")); setFinished(true); emit finished(); } }
-    qint64 bytesAvailable() const override { return body_.size() - offset_ + QIODevice::bytesAvailable(); }
-protected:
-    qint64 readData(char* data, qint64 maximum) override {
-        const auto count = std::min(maximum, static_cast<qint64>(body_.size()) - offset_);
-        if (count <= 0) return -1;
-        std::memcpy(data, body_.constData() + offset_, static_cast<size_t>(count)); offset_ += count; return count;
-    }
-};
-class FixtureTransport final : public QNetworkAccessManager {
-public:
-    QByteArray payload{"download fixture bytes"};
-    QByteArray authorization;
-    int requests{};
-    int status{200}; bool badRange{};
-protected:
-    QNetworkReply* createRequest(Operation, const QNetworkRequest& request, QIODevice*) override {
-        ++requests;
-        authorization = request.rawHeader("Authorization");
-        return new FixtureReply(request, status == 206 ? payload.mid(3) : payload, status, badRange, this);
-    }
-};
+using namespace rutool::test;
 class LinuxTests : public QObject {
     Q_OBJECT
 private slots:
+    void appImageReplacementFailures() {
+        QTemporaryDir temp; QVERIFY(temp.isValid());
+        const auto current = temp.filePath(QStringLiteral("RuTool.AppImage"));
+        const auto original = image("original version"), replacement = image("translated version");
+        FixtureTransport transport; transport.payload = replacement;
+        LinuxRelease release{QStringLiteral("2.2.0"),
+            QString::fromLatin1(QCryptographicHash::hash(replacement, QCryptographicHash::Sha256).toHex()),
+            replacement.size(), QUrl(QStringLiteral("https://github.com/example/RuTool/releases/download/v2.2.0/RuTool.AppImage"))};
+        const auto encoded = QFile::encodeName(current);
+        const auto reset = qScopeGuard([] {
+            renameFailureName = nullptr; renameBeforeFailure = false;
+            syncFailureTarget = nullptr; syncFailureOffset = 0;
+        });
+        for (int failure = 0; failure < 3; ++failure) {
+            QVERIFY(write(current, original));
+            QVERIFY(QFile::setPermissions(current, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+            if (failure < 2) { renameFailureName = "RuTool.AppImage"; renameBeforeFailure = failure == 1; }
+            else { syncFailureTarget = encoded.constData(); syncFailureOffset = 64; }
+            auto result = platform::installAppImageUpdate(release, current, current, *hashFile(current), {}, {}, &transport);
+            QVERIFY(!result);
+            if (failure < 2) QVERIFY(renameFailureName == nullptr);
+            else QVERIFY(syncFailureTarget == nullptr);
+            QCOMPARE(read(current), failure == 0 ? original : replacement);
+            const auto previous = current + QStringLiteral(".rutool-previous.AppImage");
+            QCOMPARE(read(previous), original);
+            QVERIFY(QFile::permissions(previous).testFlag(QFileDevice::ExeOwner));
+        }
+    }
     void installerConfiguration() {
         QTemporaryDir temp; QVERIFY(temp.isValid());
         const auto previous = qgetenv("XDG_CONFIG_HOME");
@@ -126,21 +153,6 @@ private slots:
         QVERIFY(readPackagePassword(bundled));
     }
 
-    void cryptoVectors() {
-        QByteArray output(32, '\0');
-        QVERIFY(crypto::pbkdf2Sha256(view(QByteArray("password")), view(QByteArray("salt")), 1,
-            {reinterpret_cast<unsigned char*>(output.data()), 32}));
-        QCOMPARE(output.toHex(), QByteArray("120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"));
-        // NIST AES-256-GCM, empty plaintext, all-zero key and 96-bit IV.
-        platform::Secret key(QByteArray(32, '\0'));
-        auto decrypted = platform::decryptGcm(key, QByteArray(12, '\0'), {}, QByteArray::fromHex("530f8afbc74536b9a963b4f1c4cb738b"), {});
-        QVERIFY(decrypted); QVERIFY(decrypted->bytes().isEmpty());
-        QVERIFY(!platform::decryptGcm(key, QByteArray(12, '\0'), {}, QByteArray(16, '\0'), {}));
-        const auto message = read(fixture("message.bin")), signature = read(fixture("signature.p1363")), publicKey = read(fixture("public.der"));
-        QVERIFY(verifySignedPayload(message, signature, publicKey));
-        QVERIFY(!verifySignedPayload(message + '!', signature, publicKey));
-        QVERIFY(!verifySignedPayload(message, signature.left(63), publicKey));
-    }
     void localProtection() {
         QTemporaryDir temp; QVERIFY(temp.isValid()); qputenv("XDG_DATA_HOME", temp.path().toUtf8());
         auto cipher = platform::protectUser("secret fixture", "context"); QVERIFY(cipher);
@@ -196,6 +208,117 @@ private slots:
         QVERIFY(platform::requireFreeSpace({{target, 1}})); QVERIFY(!platform::requireFreeSpace({{target, std::numeric_limits<quint64>::max()}}));
         QVERIFY(platform::currentProcessStartedTicks());
     }
+    void replacementFailureStates() {
+        QTemporaryDir temp; QVERIFY(temp.isValid());
+        const auto target = temp.filePath(QStringLiteral("target"));
+        const auto stage = temp.filePath(QStringLiteral("stage"));
+        const auto encodedStage = QFile::encodeName(stage);
+        const auto encodedTarget = QFile::encodeName(target);
+        const auto reset = qScopeGuard([] {
+            syncFailureFile = nullptr; syncFailureTarget = nullptr;
+            renameFailureName = nullptr; renameBeforeFailure = false;
+        });
+        QVERIFY(write(target, "original"));
+        auto missing = platform::replaceFile(stage, target);
+        QVERIFY(!missing); QCOMPARE(missing.error().state, platform::ReplacementState::NotReplaced);
+        QCOMPARE(read(target), QByteArray("original"));
+
+        QVERIFY(write(stage, "translated"));
+        syncFailureFile = encodedStage.constData();
+        auto beforeRename = platform::replaceFile(stage, target);
+        QVERIFY(!beforeRename); QVERIFY(syncFailureFile == nullptr);
+        QCOMPARE(beforeRename.error().state, platform::ReplacementState::NotReplaced);
+        QCOMPARE(read(target), QByteArray("original")); QCOMPARE(read(stage), QByteArray("translated"));
+
+        syncFailureTarget = encodedTarget.constData();
+        auto afterRename = platform::replaceFile(stage, target);
+        QVERIFY(!afterRename); QVERIFY(syncFailureTarget == nullptr);
+        QCOMPARE(afterRename.error().state, platform::ReplacementState::Replaced);
+        QCOMPARE(read(target), QByteArray("translated")); QVERIFY(!QFileInfo::exists(stage));
+
+        for (const bool didRename : {false, true}) {
+            QVERIFY(write(target, "original")); QVERIFY(write(stage, "translated"));
+            renameFailureName = "target"; renameBeforeFailure = didRename;
+            auto uncertain = platform::replaceFile(stage, target);
+            QVERIFY(!uncertain); QVERIFY(renameFailureName == nullptr);
+            QCOMPARE(uncertain.error().state, platform::ReplacementState::Unknown);
+            QCOMPARE(read(target), QByteArray(didRename ? "translated" : "original"));
+            QCOMPARE(QFileInfo::exists(stage), !didRename);
+        }
+    }
+    void uncertainReplacementRollback() {
+        QTemporaryDir temp; QVERIFY(temp.isValid()); qputenv("XDG_DATA_HOME", temp.path().toUtf8());
+        const auto folder = temp.filePath(QStringLiteral("prepared")); QVERIFY(QDir().mkpath(folder));
+        platform::Secret password(QByteArray("public-test-password"));
+        auto package = decryptPackage(fixture("sample.rut.fixture"), folder, password); QVERIFY(package);
+        InstallationRequest request; request.game = temp.filePath(QStringLiteral("game"));
+        request.package = *package; request.backupRoot = temp.filePath(QStringLiteral("backups"));
+        request.originalVerified = true;
+        const auto target = gameDatabasePath(request.game);
+        const auto reset = qScopeGuard([] { renameFailureName = nullptr; renameBeforeFailure = false; });
+        for (const bool didRename : {false, true}) {
+            QVERIFY(write(target, read(fixture("original.db.fixture"))));
+            renameFailureName = "ExcelDB.db"; renameBeforeFailure = didRename;
+            auto result = installPackage(request, []() -> Result<void> { return {}; });
+            QVERIFY(!result); QVERIFY(renameFailureName == nullptr);
+            QCOMPARE(read(target), read(fixture("original.db.fixture")));
+            QVERIFY(!QFileInfo::exists(target + QStringLiteral(".baretool-transaction.dpapi")));
+        }
+    }
+    void changedTargetBeforeCommit() {
+        QTemporaryDir temp; QVERIFY(temp.isValid()); qputenv("XDG_DATA_HOME", temp.path().toUtf8());
+        const auto folder = temp.filePath(QStringLiteral("prepared")); QVERIFY(QDir().mkpath(folder));
+        platform::Secret password(QByteArray("public-test-password"));
+        auto package = decryptPackage(fixture("sample.rut.fixture"), folder, password); QVERIFY(package);
+        InstallationRequest request; request.game = temp.filePath(QStringLiteral("game"));
+        request.package = *package; request.backupRoot = temp.filePath(QStringLiteral("backups"));
+        request.originalVerified = true;
+        const auto target = gameDatabasePath(request.game);
+        QVERIFY(write(target, read(fixture("original.db.fixture"))));
+        const auto encodedTarget = QFile::encodeName(target);
+        const auto reset = qScopeGuard([] { changeBeforeCommit = nullptr; });
+        changeBeforeCommit = encodedTarget.constData();
+        auto result = installPackage(request, []() -> Result<void> { return {}; });
+        QVERIFY(!result); QVERIFY(changeBeforeCommit == nullptr);
+        QCOMPARE(read(target), QByteArray("unknown contents"));
+        const auto journal = target + QStringLiteral(".baretool-transaction.dpapi");
+        QVERIFY(QFileInfo::exists(journal)); QVERIFY(!recoverInstallation(request.game));
+        bool originalPreserved{};
+        for (const auto& backup : QDir(request.backupRoot).entryList({QStringLiteral("*.db")}, QDir::Files))
+            originalPreserved = originalPreserved || read(QDir(request.backupRoot).filePath(backup)) == read(fixture("original.db.fixture"));
+        QVERIFY(originalPreserved);
+        QVERIFY(write(target, read(fixture("original.db.fixture"))));
+        QVERIFY(recoverInstallation(request.game)); QVERIFY(!QFileInfo::exists(journal));
+    }
+    void commitJournalFailureThenInterruptedRollback() {
+        QTemporaryDir temp; QVERIFY(temp.isValid()); qputenv("XDG_DATA_HOME", temp.path().toUtf8());
+        const auto folder = temp.filePath(QStringLiteral("prepared")); QVERIFY(QDir().mkpath(folder));
+        platform::Secret password(QByteArray("public-test-password"));
+        auto package = decryptPackage(fixture("sample.rut.fixture"), folder, password); QVERIFY(package);
+        InstallationRequest request; request.game = temp.filePath(QStringLiteral("game"));
+        request.package = *package; request.backupRoot = temp.filePath(QStringLiteral("backups"));
+        request.originalVerified = true;
+        const auto target = gameDatabasePath(request.game);
+        const auto original = read(fixture("original.db.fixture"));
+        QVERIFY(write(target, original));
+        const auto encodedTarget = QFile::encodeName(target);
+        const auto reset = qScopeGuard([] {
+            failCommitJournalTarget = nullptr; renameFailureName = nullptr; renameBeforeFailure = false;
+        });
+        failCommitJournalTarget = encodedTarget.constData();
+        auto installed = installPackage(request, []() -> Result<void> { return {}; });
+        QVERIFY(!installed); QVERIFY(failCommitJournalTarget == nullptr); QVERIFY(renameFailureName == nullptr);
+        QCOMPARE(read(target), original);
+        const auto journal = target + QStringLiteral(".baretool-transaction.dpapi");
+        QVERIFY(QFileInfo::exists(journal));
+        auto plain = platform::unprotectUser(read(journal), target.toUtf8()); QVERIFY(plain);
+        const auto object = QJsonDocument::fromJson(plain->bytes()).object();
+        QVERIFY(object.contains(QStringLiteral("Committed")));
+        QVERIFY(!object.value(QStringLiteral("Committed")).toBool());
+        QVERIFY(recoverInstallation(request.game));
+        QCOMPARE(read(target), original);
+        QVERIFY(!QFileInfo::exists(journal));
+    }
     void steamDiscovery() {
         QTemporaryDir temp; QVERIFY(temp.isValid()); const QDir dir(temp.path());
         const auto steam = dir.filePath(QStringLiteral("Steam")), library = dir.filePath(QStringLiteral("Library With Spaces"));
@@ -216,32 +339,17 @@ private slots:
         QVERIFY(game.waitForStarted()); QVERIFY(game.waitForReadyRead());
         const bool detected = !platform::requireGameClosed(); game.kill(); game.waitForFinished(); QVERIFY(detected);
     }
-    void packageInstallRestore() {
-        QTemporaryDir temp; QVERIFY(temp.isValid()); qputenv("XDG_DATA_HOME", temp.path().toUtf8()); const QDir dir(temp.path());
-        const auto prepared = dir.filePath(QStringLiteral("prepared")); QVERIFY(QDir().mkpath(prepared));
+    void installationDurabilityFailures() {
+        QTemporaryDir temp; QVERIFY(temp.isValid()); qputenv("XDG_DATA_HOME", temp.path().toUtf8());
+        const auto prepared = temp.filePath(QStringLiteral("prepared")); QVERIFY(QDir().mkpath(prepared));
         platform::Secret password(QByteArray("public-test-password"));
-        auto package = decryptPackage(fixture("sample.rut.fixture"), prepared, password); QVERIFY2(package, package ? "" : qPrintable(package.error().message));
-        const auto s = package->signature;
-        RutSignature signature{1, s.value(QStringLiteral("FileSha256")).toString(), s.value(QStringLiteral("RuToolVersion")).toString(),
-            s.value(QStringLiteral("WatermarkSha256")).toString(), s.value(QStringLiteral("Algorithm")).toString(),
-            s.value(QStringLiteral("SignerId")).toString(), s.value(QStringLiteral("SignatureBase64")).toString()};
-        QVERIFY(verifyRutSignature(signature, read(fixture("public.der"))));
-        const auto game = dir.filePath(QStringLiteral("game")), database = gameDatabasePath(game);
+        auto package = decryptPackage(fixture("sample.rut.fixture"), prepared, password); QVERIFY(package);
+        InstallationRequest request; request.game = temp.filePath(QStringLiteral("game")); request.package = *package;
+        request.backupRoot = temp.filePath(QStringLiteral("backups")); request.originalVerified = true;
+        const auto database = gameDatabasePath(request.game);
         QVERIFY(write(database, read(fixture("original.db.fixture"))));
-        InstallationRequest request; request.game = game; request.package = *package;
-        request.backupRoot = dir.filePath(QStringLiteral("backups")); request.originalVerified = true;
-        const auto deny = []() -> Result<void> { return std::unexpected(Error{ErrorCode::Signature, QStringLiteral("test guard rejected")}); };
-        QVERIFY(!installPackage(request, deny)); QCOMPARE(read(database), read(fixture("original.db.fixture")));
-        const auto guard = [&]() -> Result<void> {
-            if (!verifyRutSignature(signature, read(fixture("public.der")))) return std::unexpected(Error{ErrorCode::Signature, QStringLiteral("test signature rejected")});
-            return {};
-        };
-        auto installed = installPackage(request, guard); QVERIFY2(installed, installed ? "" : qPrintable(installed.error().message));
-        QCOMPARE(read(database), read(fixture("patched.db.fixture"))); QVERIFY(!installed->originalBackup.isEmpty());
-        auto receipt = originalReceipt(game, installed->originalBackup); QVERIFY(receipt);
-        auto duplicate = installPackage(request, guard); QVERIFY(duplicate); QVERIFY(duplicate->alreadyInstalled);
-        auto restored = restoreOriginal(game, installed->originalBackup); QVERIFY2(restored, restored ? "" : qPrintable(restored.error().message));
-        QCOMPARE(read(database), read(fixture("original.db.fixture")));
+        const auto guard = []() -> Result<void> { return {}; };
+        const auto reset = qScopeGuard([] { syncFailureTarget = nullptr; corruptAfterRename = false; });
         const auto encodedTarget = QFile::encodeName(database);
         syncFailureTarget = encodedTarget.constData();
         auto durabilityFailure = installPackage(request, guard);
@@ -257,23 +365,16 @@ private slots:
         QVERIFY(unknownInjected); QVERIFY(!unknownFailure);
         const auto journal = database + QStringLiteral(".baretool-transaction.dpapi");
         QVERIFY(QFileInfo::exists(journal));
-        QVERIFY(!recoverInstallation(game));
+        QVERIFY(!recoverInstallation(request.game));
         QVERIFY(QFileInfo::exists(journal));
         bool originalPreserved{};
         for (const auto& backup : QDir(request.backupRoot).entryList({QStringLiteral("*.db")}, QDir::Files))
             originalPreserved = originalPreserved || read(QDir(request.backupRoot).filePath(backup)) == read(fixture("original.db.fixture"));
         QVERIFY(originalPreserved);
         QVERIFY(write(database, read(fixture("patched.db.fixture"))));
-        QVERIFY(recoverInstallation(game));
+        QVERIFY(recoverInstallation(request.game));
         QCOMPARE(read(database), read(fixture("original.db.fixture")));
         QVERIFY(!QFileInfo::exists(journal));
-        QVERIFY(write(dir.filePath(QStringLiteral("bad.rut")), read(fixture("sample.rut.fixture")).left(60)));
-        const auto badFolder = dir.filePath(QStringLiteral("bad")); QVERIFY(QDir().mkpath(badFolder));
-        QVERIFY(!decryptPackage(dir.filePath(QStringLiteral("bad.rut")), badFolder, password));
-        auto corrupt = read(fixture("sample.rut.fixture")); corrupt[50] ^= 1; QVERIFY(write(dir.filePath(QStringLiteral("bad.rut")), corrupt));
-        QVERIFY(!decryptPackage(dir.filePath(QStringLiteral("bad.rut")), badFolder, password));
-        platform::Secret wrong(QByteArray("wrong password")); QVERIFY(!decryptPackage(fixture("sample.rut.fixture"), badFolder, wrong));
-        auto cancelled = std::make_shared<std::atomic_bool>(true); QVERIFY(!decryptPackage(fixture("sample.rut.fixture"), badFolder, password, cancelled));
     }
     void abruptInstallerExit() {
         QTemporaryDir temp; QVERIFY(temp.isValid());
@@ -292,140 +393,6 @@ private slots:
         QVERIFY(recoverInstallation(game));
         QCOMPARE(read(database), read(fixture("original.db.fixture")));
         QVERIFY(!QFileInfo::exists(journal));
-    }
-    void downloads() {
-        QTemporaryDir temp; QVERIFY(temp.isValid()); QDir dir(temp.path()); FixtureTransport transport;
-        const auto hash = QString::fromLatin1(QCryptographicHash::hash(transport.payload, QCryptographicHash::Sha256).toHex());
-        const QUrl url(QStringLiteral("https://bluehalo.site/test-fixture"));
-        const auto destination = dir.filePath(QStringLiteral("download.rut"));
-        auto downloaded = downloadAsset(url, transport.payload.size(), hash, destination, {}, {}, &transport);
-        QVERIFY(downloaded); QCOMPARE(read(destination), transport.payload);
-        QVERIFY(QFile::remove(destination));
-        QVERIFY(!downloadAsset(url, transport.payload.size(), QString(64, '0'), destination, {}, {}, &transport));
-        QVERIFY(!QFileInfo::exists(destination)); QVERIFY(!QFileInfo::exists(destination + QStringLiteral(".partial")));
-        QVERIFY(write(destination + QStringLiteral(".partial"), transport.payload.left(3))); transport.status = 206;
-        QVERIFY(downloadAsset(url, transport.payload.size(), hash, destination, {}, {}, &transport));
-        QCOMPARE(read(destination), transport.payload); QVERIFY(QFile::remove(destination));
-        QVERIFY(write(destination + QStringLiteral(".partial"), transport.payload.left(3))); transport.badRange = true;
-        QVERIFY(!downloadAsset(url, transport.payload.size(), hash, destination, {}, {}, &transport));
-        transport.status = 302;
-        QVERIFY(!downloadAsset(url, transport.payload.size(), hash, destination, {}, {}, &transport));
-        QVERIFY(transport.authorization.isEmpty());
-    }
-    void addonDelta() {
-        const QByteArray original("0123456789");
-        const auto word = [](quint32 value) {
-            QByteArray bytes(4, '\0'); qToLittleEndian(value, bytes.data()); return bytes;
-        };
-        const QByteArray magic("RUTD1\0", 6);
-        const auto delta = magic + word(3) + word(2) + word(0x80000002u) + "XY" + word(5) + word(0);
-        auto result = applyAddonDelta(original, delta);
-        QVERIFY(result); QCOMPARE(*result, QByteArray("234XY01234"));
-        QVERIFY(!applyAddonDelta({}, delta));
-        QVERIFY(!applyAddonDelta(original, magic));
-        QVERIFY(!applyAddonDelta(original, QByteArray("RUTD2\0", 6) + delta.sliced(6)));
-        QVERIFY(!applyAddonDelta(original, magic + word(0) + word(0)));
-        QVERIFY(!applyAddonDelta(original, magic + word(11) + word(0)));
-        QVERIFY(!applyAddonDelta(original, magic + word(10) + word(1)));
-        QVERIFY(!applyAddonDelta(original, magic + word(0xffffffffu)));
-        QVERIFY(!applyAddonDelta(original, magic + word(1) + word(0xffffffffu)));
-        for (qsizetype i = 0; i < delta.size(); ++i) QVERIFY(!applyAddonDelta(original, delta.first(i)));
-        QVERIFY(!applyAddonDelta(original, delta + 'x'));
-        QVERIFY(!applyAddonDelta(original, delta + word(1) + word(0)));
-        const QByteArray maximum(64 * 1024 * 1024, 'x');
-        QVERIFY(applyAddonDelta(maximum, magic + word(static_cast<quint32>(maximum.size())) + word(0)));
-        QVERIFY(!applyAddonDelta(maximum + 'x', magic));
-        QVERIFY(!applyAddonDelta(original, maximum + 'x'));
-    }
-    void addonDeltaGeneratorRoundtrip() {
-        QTemporaryDir temp; QVERIFY(temp.isValid());
-        QByteArray original(8192, '\0');
-        for (qsizetype i = 0; i < original.size(); ++i) original[i] = static_cast<char>('a' + i % 23);
-        auto localized = original; localized.replace(135, 5, "HELLO"); localized.replace(8050, 5, "WORLD");
-        const auto source = temp.filePath(QStringLiteral("original.bundle"));
-        const auto target = temp.filePath(QStringLiteral("localized.bundle"));
-        const auto delta = temp.filePath(QStringLiteral("addon.rudp"));
-        QVERIFY(write(source, original)); QVERIFY(write(target, localized));
-        QProcess generator;
-        generator.start(QStringLiteral(RUTOOL_PYTHON), {QStringLiteral(RUTOOL_DELTA_GENERATOR), source, target, delta});
-        QVERIFY(generator.waitForFinished(10000)); QCOMPARE(generator.exitCode(), 0);
-        const auto bytes = read(delta); QVERIFY(bytes.size() < localized.size());
-        auto applied = applyAddonDelta(original, bytes); QVERIFY(applied); QCOMPARE(*applied, localized);
-        const auto metadata = QJsonDocument::fromJson(generator.readAllStandardOutput()).object();
-        QCOMPARE(metadata.value(QStringLiteral("packageBytes")).toInteger(), bytes.size());
-        QCOMPARE(metadata.value(QStringLiteral("packageSha256")).toString(), *hashFile(delta));
-        generator.start(QStringLiteral(RUTOOL_PYTHON), {QStringLiteral(RUTOOL_DELTA_GENERATOR), source, target, delta});
-        QVERIFY(generator.waitForFinished(10000)); QVERIFY(generator.exitCode() != 0);
-        QCOMPARE(read(delta), bytes); // The producer must refuse to overwrite existing output.
-    }
-    void premiumAddonCatalogAndTransfer() {
-        QTemporaryDir temp; QVERIFY(temp.isValid()); FixtureTransport transport;
-        const auto hash = QString::fromLatin1(QCryptographicHash::hash(transport.payload, QCryptographicHash::Sha256).toHex());
-        QJsonObject catalog{{QStringLiteral("Releases"), QJsonArray{}}, {QStringLiteral("LoadingScreens"),
-            QJsonObject{{QStringLiteral("PackageBytes"), transport.payload.size()}, {QStringLiteral("PackageSha256"), hash}}}};
-        auto parsed = parsePremiumCatalogResponse(catalog); QVERIFY(parsed); QVERIFY(parsed->loadingScreens);
-        QCOMPARE(parsed->loadingScreens->bytes, transport.payload.size()); QCOMPARE(parsed->loadingScreens->sha256, hash);
-        QVERIFY(!parsePremiumCatalogResponse({}));
-        auto legacy = parsePremiumCatalogResponse({{QStringLiteral("Releases"), QJsonArray{}}});
-        QVERIFY(legacy); QVERIFY(!legacy->loadingScreens);
-        for (const auto bytes : {qint64{0}, qint64{-1}, qint64{64 * 1024 * 1024 + 1}}) {
-            catalog[QStringLiteral("LoadingScreens")] = QJsonObject{{QStringLiteral("PackageBytes"), bytes}, {QStringLiteral("PackageSha256"), hash}};
-            auto invalid = parsePremiumCatalogResponse(catalog); QVERIFY(invalid); QVERIFY(!invalid->loadingScreens);
-        }
-        catalog[QStringLiteral("LoadingScreens")] = QJsonObject{{QStringLiteral("PackageBytes"), 10}, {QStringLiteral("PackageSha256"), QStringLiteral("invalid")}};
-        parsed = parsePremiumCatalogResponse(catalog); QVERIFY(parsed); QVERIFY(!parsed->loadingScreens);
-        const QUrl url(QStringLiteral("https://bluehalo.site/api/installer/premium/addons/loading-screens"));
-        QVERIFY(premiumAssetUrl(url));
-        for (const auto& bad : {QStringLiteral("http://bluehalo.site/api/installer/premium/addons/loading-screens"),
-             QStringLiteral("https://evil.invalid/api/installer/premium/addons/loading-screens"),
-             url.toString() + QStringLiteral("?token=x"), url.toString() + QStringLiteral("#fragment"),
-             url.toString() + QStringLiteral("/other")}) QVERIFY(!premiumAssetUrl(QUrl(bad)));
-        const auto path = temp.filePath(QStringLiteral("addon.rudp"));
-        QVERIFY(!downloadAsset(url, transport.payload.size(), hash, path, {}, {}, &transport));
-        QCOMPARE(transport.requests, 0);
-        QVERIFY(downloadAsset(url, transport.payload.size(), hash, path, {}, {}, &transport, "test-code"));
-        QCOMPARE(read(path), transport.payload); QCOMPARE(transport.authorization, QByteArray("Bearer test-code"));
-        QVERIFY(QFile::remove(path));
-        transport.status = 302; const auto previous = transport.requests;
-        QVERIFY(!downloadAsset(url, transport.payload.size(), hash, path, {}, {}, &transport, "test-code"));
-        QCOMPARE(transport.requests, previous + 1); // Never forward a Premium bearer through redirects.
-        transport.status = 403;
-        auto denied = downloadAsset(url, transport.payload.size(), hash, path, {}, {}, &transport, "test-code");
-        QVERIFY(!denied); QCOMPARE(denied.error().code, ErrorCode::AccessDenied);
-        QVERIFY(!QFileInfo::exists(path));
-    }
-    void addonRecoveryAndRejection() {
-        QTemporaryDir temp; QVERIFY(temp.isValid()); qputenv("XDG_DATA_HOME", temp.path().toUtf8());
-        const auto game = temp.filePath(QStringLiteral("game"));
-        const auto target = QDir(game).filePath(QStringLiteral("BlueArchive_Data/StreamingAssets/PUB/Resource/Preload/Windows/"
-            "prologgroup-assets-_mx-addressableasset-uis-01_common-12_loading-_mxprolog-2024-11-18_assets_all_2654595875.bundle"));
-        const QString id(32, 'b'); const auto backup = target + QStringLiteral(".baretool-rollback-") + id + QStringLiteral(".tmp");
-        const auto stage = target + QStringLiteral(".baretool-install-") + id + QStringLiteral(".tmp");
-        QVERIFY(write(target, "patched fixture")); QVERIFY(write(backup, "original fixture"));
-        const auto before = hashFile(backup), after = hashFile(target); QVERIFY(before); QVERIFY(after);
-        QJsonObject item{{QStringLiteral("Target"), target}, {QStringLiteral("Backup"), backup}, {QStringLiteral("Stage"), stage},
-            {QStringLiteral("Before"), *before}, {QStringLiteral("After"), *after}};
-        QJsonObject journal{{QStringLiteral("FormatVersion"), 1}, {QStringLiteral("Id"), id}, {QStringLiteral("Files"), QJsonArray{item}},
-            {QStringLiteral("OriginalRetained"), false}, {QStringLiteral("Committed"), false}};
-        const auto saveJournal = [&] {
-            auto encrypted = platform::protectUser(QJsonDocument(journal).toJson(QJsonDocument::Compact), target.toUtf8());
-            return encrypted && write(target + QStringLiteral(".baretool-transaction.dpapi"), *encrypted);
-        };
-        const auto guard = []() -> Result<void> { return {}; };
-        // A journal may only name this addon's target, never arbitrary files.
-        item[QStringLiteral("Target")] = temp.filePath(QStringLiteral("unrelated"));
-        journal[QStringLiteral("Files")] = QJsonArray{item}; QVERIFY(saveJournal());
-        QVERIFY(!installLoadingScreensAddon(game, temp.filePath(QStringLiteral("missing.rudp")), temp.path(), guard));
-        QCOMPARE(read(target), QByteArray("patched fixture")); QVERIFY(QFileInfo::exists(backup));
-        item[QStringLiteral("Target")] = target; journal[QStringLiteral("Files")] = QJsonArray{item}; QVERIFY(saveJournal());
-        // Recovery restores the synthetic file; it is then rejected as an unsupported game bundle.
-        QVERIFY(!installLoadingScreensAddon(game, temp.filePath(QStringLiteral("missing.rudp")), temp.path(), guard));
-        QCOMPARE(read(target), QByteArray("original fixture")); QVERIFY(!QFileInfo::exists(backup));
-        QVERIFY(!QFileInfo::exists(target + QStringLiteral(".baretool-transaction.dpapi")));
-        const auto realTarget = temp.filePath(QStringLiteral("actual.bundle")); QVERIFY(QFile::rename(target, realTarget));
-        QVERIFY(QFile::link(realTarget, target));
-        QVERIFY(!installLoadingScreensAddon(game, {}, temp.path(), guard));
-        QCOMPARE(read(realTarget), QByteArray("original fixture"));
     }
     void recoveryJournal() {
         QTemporaryDir temp; QVERIFY(temp.isValid()); qputenv("XDG_DATA_HOME", temp.path().toUtf8());
@@ -452,45 +419,36 @@ private slots:
         QVERIFY(recoverInstallation(game)); QCOMPARE(read(target), read(fixture("original.db.fixture")));
         QVERIFY(!QFileInfo::exists(path)); QVERIFY(!QFileInfo::exists(backup));
     }
-    void bundleRecoveryJournal() {
+    void recoveryRetriesDurability() {
         QTemporaryDir temp; QVERIFY(temp.isValid()); qputenv("XDG_DATA_HOME", temp.path().toUtf8());
-        const auto game = temp.filePath(QStringLiteral("game")), database = gameDatabasePath(game);
-        const std::vector<QString> paths{database, QFileInfo(database).dir().filePath(QStringLiteral("Excel.zip")),
-            QDir(game).filePath(QStringLiteral("BlueArchive_Data/resources.assets"))};
-        const QString id(32, 'c'); QJsonArray records;
-        for (const auto& target : paths) {
-            const auto backup = target + QStringLiteral(".baretool-rollback-") + id + QStringLiteral(".tmp");
-            const auto stage = target + QStringLiteral(".baretool-install-") + id + QStringLiteral(".tmp");
-            QVERIFY(write(target, "modified bundle fixture")); QVERIFY(write(backup, "original bundle fixture"));
-            auto before = hashFile(backup), after = hashFile(target); QVERIFY(before); QVERIFY(after);
-            records.append(QJsonObject{{QStringLiteral("Target"), target}, {QStringLiteral("Backup"), backup}, {QStringLiteral("Stage"), stage},
-                {QStringLiteral("Before"), *before}, {QStringLiteral("After"), *after}});
-        }
-        QJsonObject journal{{QStringLiteral("FormatVersion"), 1}, {QStringLiteral("Id"), id}, {QStringLiteral("Files"), records},
+        const auto game = temp.filePath(QStringLiteral("game")), target = gameDatabasePath(game);
+        const QString id(32, 'd');
+        const auto backup = target + QStringLiteral(".baretool-rollback-") + id + QStringLiteral(".tmp");
+        const auto stage = target + QStringLiteral(".baretool-install-") + id + QStringLiteral(".tmp");
+        QVERIFY(write(target, read(fixture("patched.db.fixture"))));
+        QVERIFY(write(backup, read(fixture("original.db.fixture"))));
+        const auto before = hashFile(backup), after = hashFile(target); QVERIFY(before); QVERIFY(after);
+        const QJsonObject item{{QStringLiteral("Target"), target}, {QStringLiteral("Backup"), backup}, {QStringLiteral("Stage"), stage},
+            {QStringLiteral("Before"), *before}, {QStringLiteral("After"), *after}};
+        const QJsonObject journal{{QStringLiteral("FormatVersion"), 1}, {QStringLiteral("Id"), id}, {QStringLiteral("Files"), QJsonArray{item}},
             {QStringLiteral("OriginalRetained"), false}, {QStringLiteral("Committed"), false}};
-        const auto saveJournal = [&] {
-            auto encrypted = platform::protectUser(QJsonDocument(journal).toJson(QJsonDocument::Compact), database.toUtf8());
-            return encrypted && write(database + QStringLiteral(".baretool-transaction.dpapi"), *encrypted);
-        };
-        auto truncated = records; truncated.removeLast(); journal[QStringLiteral("Files")] = truncated; QVERIFY(saveJournal());
-        QVERIFY(!recoverInstallation(game));
-        for (const auto& path : paths) QCOMPARE(read(path), QByteArray("modified bundle fixture"));
-        journal[QStringLiteral("Files")] = records; QVERIFY(saveJournal());
+        auto encrypted = platform::protectUser(QJsonDocument(journal).toJson(QJsonDocument::Compact), target.toUtf8()); QVERIFY(encrypted);
+        const auto path = target + QStringLiteral(".baretool-transaction.dpapi"); QVERIFY(write(path, *encrypted));
+        const auto encodedTarget = QFile::encodeName(target);
+        const auto reset = qScopeGuard([] {
+            syncFailureTarget = nullptr; syncFailureFile = nullptr; syncFailurePrefix = "translat";
+        });
+        syncFailurePrefix = "original"; syncFailureTarget = encodedTarget.constData();
+        QVERIFY(!recoverInstallation(game)); QVERIFY(syncFailureTarget == nullptr);
+        QCOMPARE(read(target), read(fixture("original.db.fixture")));
+        QVERIFY(QFileInfo::exists(path)); QVERIFY(QFileInfo::exists(backup));
+        // Matching bytes alone do not make the previous rename durable.
+        syncFailureTarget = encodedTarget.constData();
+        QVERIFY(!recoverInstallation(game)); QVERIFY(syncFailureTarget == nullptr);
+        QVERIFY(QFileInfo::exists(path)); QVERIFY(QFileInfo::exists(backup));
         QVERIFY(recoverInstallation(game));
-        for (const auto& path : paths) {
-            QCOMPARE(read(path), QByteArray("original bundle fixture"));
-            QVERIFY(!QFileInfo::exists(path + QStringLiteral(".baretool-rollback-") + id + QStringLiteral(".tmp")));
-        }
-        QVERIFY(!QFileInfo::exists(database + QStringLiteral(".baretool-transaction.dpapi")));
-    }
-    void networkPolicy() {
-        QVERIFY(ServiceClient::allowedEndpoint(QUrl(QStringLiteral("https://bluehalo.site/api/installer/application/v2/latest"))));
-        QVERIFY(!ServiceClient::allowedEndpoint(QUrl(QStringLiteral("https://bluehalo.site/api/installer/application/latest"))));
-        QVERIFY(allowedAssetUrl(QUrl(QStringLiteral("https://bluehalo.site/api/installer/assets/test"))));
-        QVERIFY(!allowedAssetUrl(QUrl(QStringLiteral("http://bluehalo.site/api/installer/assets/test"))));
-        QVERIFY(!allowedAssetUrl(QUrl(QStringLiteral("https://evil.invalid/api/installer/assets/test"))));
-        QVERIFY(!ServiceClient::allowedEndpoint(QUrl(QStringLiteral("http://bluehalo.site/healthz"))));
-        QVERIFY(!ServiceClient::allowedEndpoint(QUrl(QStringLiteral("https://bluehalo.site/healthz?token=x"))));
+        QCOMPARE(read(target), read(fixture("original.db.fixture")));
+        QVERIFY(!QFileInfo::exists(path)); QVERIFY(!QFileInfo::exists(backup));
     }
 };
 int main(int argc, char** argv) {

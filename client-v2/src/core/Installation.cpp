@@ -151,33 +151,45 @@ Result<QString> replace(std::vector<FileReplacement> files, const QString& backu
     QJsonObject journal{{QStringLiteral("FormatVersion"), 1}, {QStringLiteral("Id"), id}, {QStringLiteral("Files"), records}, {QStringLiteral("OriginalRetained"), retainOriginal},
         {QStringLiteral("OriginalBackup"), retainOriginal ? backups[0] : keptBackup}, {QStringLiteral("OldReceipts"), oldReceipts}, {QStringLiteral("Committed"), false}};
     auto recorded = writeJournal(files[0].target, journal); if (!recorded) { preserveRecovery = QFileInfo::exists(journalPath(files[0].target)); return std::unexpected(recorded.error()); }
-    size_t installed{};
+    std::vector<platform::ReplacementState> replacements(files.size(), platform::ReplacementState::NotReplaced);
+    bool commitJournalAttempted{};
     auto commit = [&]() -> Result<void> {
         for (size_t i = 0; i < files.size(); ++i) {
             auto current = exactHash(files[i].target, files[i].before, {});
         if (!current) return std::unexpected(current.error());
             auto changed = platform::replaceFile(staged[i], files[i].target);
-            // A failed replacement may already have changed the target (rename +
-            // failed fsync). Validate every attempted target during rollback;
-            // unknown/unreadable contents must keep the journal and backups.
-            ++installed;
-            if (!changed) return std::unexpected(changed.error());
+            replacements[i] = changed ? platform::ReplacementState::Replaced : changed.error().state;
+            if (!changed) return std::unexpected(changed.error().cause);
             auto after = exactHash(files[i].target, files[i].after, {});
         if (!after) return std::unexpected(after.error());
         }
         if (finalize) { auto finished = finalize(); if (!finished) return std::unexpected(finished.error()); }
         journal[QStringLiteral("Committed")] = true;
+        commitJournalAttempted = true;
         return writeJournal(files[0].target, journal);
     };
     auto result = commit();
     if (!result) {
         preserveRecovery = true;
-        for (size_t i = installed; i > 0; --i) {
+        // A failed journal flush can leave Committed=true visible on disk.
+        // Persist rollback intent before changing any target back, so another
+        // interruption cannot leave recovery expecting only installed bytes.
+        if (commitJournalAttempted) {
+            journal[QStringLiteral("Committed")] = false;
+            auto pending = writeJournal(files[0].target, journal);
+            if (!pending) return std::unexpected(pending.error());
+        }
+        // Check untouched targets too: a failed precondition or external change
+        // must not cause us to discard the journal and the only original copy.
+        for (size_t i = files.size(); i > 0; --i) {
             const auto& item = files[i - 1];
             auto current = hashFile(item.target); auto allowed = sidecars(item.target);
-            if (!current || !allowed || (*current != item.before && *current != item.after))
+            if (!current || !allowed || (*current != item.before && *current != item.after) ||
+                (replacements[i - 1] == platform::ReplacementState::NotReplaced && *current != item.before))
                 return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Файл изменён другой программой после замены. Автоматический откат остановлен; журнал и копии сохранены."), result.error().message});
-            if (*current == item.before) continue;
+            if (*current == item.before && replacements[i - 1] == platform::ReplacementState::NotReplaced) continue;
+            auto backupHash = exactHash(backups[i - 1], item.before, {});
+            if (!backupHash) return std::unexpected(backupHash.error());
             QFile::remove(staged[i - 1]);
             if (!QFile::copy(backups[i - 1], staged[i - 1])) return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Откат не завершён. Копии восстановления сохранены."), result.error().message});
             auto rolledBack = platform::replaceFile(staged[i - 1], files[i - 1].target);
@@ -239,12 +251,13 @@ Result<std::optional<QString>> recoverFiles(const std::vector<QString>& paths) {
     if (!committed && !finished) {
         for (const auto& value : records) {
             const auto item = value.toObject(); const auto target = item.value(QStringLiteral("Target")).toString(), backup = item.value(QStringLiteral("Backup")).toString(), stage = item.value(QStringLiteral("Stage")).toString();
-            const auto before = item.value(QStringLiteral("Before")).toString(); auto current = hashFile(target);
-            if (current && *current == before) continue;
+            const auto before = item.value(QStringLiteral("Before")).toString();
+            // Reapply even matching original bytes: an earlier recovery may
+            // have renamed successfully but failed to make the rename durable.
             QFile::remove(stage);
             if (!QFile::copy(backup, stage)) return std::unexpected(Error{ErrorCode::Io, QStringLiteral("Не удалось подготовить аварийное восстановление. Копии сохранены.")});
             auto flushed = platform::flushFile(stage); if (!flushed) return std::unexpected(flushed.error());
-            auto replaced = platform::replaceFile(stage, target); if (!replaced) return std::unexpected(replaced.error());
+            auto replaced = platform::replaceFile(stage, target); if (!replaced) return std::unexpected(replaced.error().cause);
             auto checked = exactHash(target, before, {}); if (!checked) return std::unexpected(checked.error());
         }
         auto restored = restoreReceipts(receipts); if (!restored) return std::unexpected(restored.error());

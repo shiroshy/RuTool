@@ -2,10 +2,11 @@
 set -euo pipefail
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 : "${RUTOOL_QT_SDK:?Set RUTOOL_QT_SDK to an existing Qt SDK root containing 6.8.3/gcc_64}"
-image=${RUTOOL_BUILD_IMAGE:-rutool-linux-bootstrap:latest}
+image=${RUTOOL_BUILD_IMAGE:-rutool-linux-bootstrap-glibc235:latest}
 test_dir=${RUTOOL_TEST_BUILD_DIR:-build-linux-preview}
 release_dir=${RUTOOL_RELEASE_BUILD_DIR:-build-linux-release}
 output_dir=${1:-}
+if [[ $# -gt 0 ]]; then shift; fi
 for path in "$test_dir" "$release_dir"; do
     [[ "$path" == build-* && "$path" != */* && "$path" != *..* ]] || { echo 'Use build-* directory names without slashes' >&2; exit 1; }
 done
@@ -31,9 +32,9 @@ docker run --rm --pull never --network none --read-only --cap-drop ALL \
     -e RUTOOL_BUILD_JOBS="${RUTOOL_BUILD_JOBS:-4}" "${mounts[@]}" "$image" \
     bash -c '
         set -euo pipefail
-        ./scripts/build-linux.sh "$1"
+        ./scripts/build-linux.sh "$1" "${@:4}"
         if [[ -n "$3" ]]; then
-            ./scripts/build-linux.sh "$2" -DBUILD_TESTING=OFF
+            ./scripts/build-linux.sh "$2" -DBUILD_TESTING=OFF "${@:4}"
             ./scripts/package-appimage.sh "$2" "$3"
         fi
-    ' bash "$test_dir" "$release_dir" "$output_dir"
+    ' bash "$test_dir" "$release_dir" "$output_dir" "$@"

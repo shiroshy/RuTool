@@ -51,8 +51,15 @@ void ClientController::initializeOperationsConnections() {
         else {
             operationStatus_ = result->status;
             if (!result->helper.isEmpty()) {
-                auto started = rutool::platform::launchHidden(result->helper, {QStringLiteral("--plan"), result->plan}, QCoreApplication::applicationDirPath());
-                if (!started) logError(QStringLiteral("Updater"), QStringLiteral("START"), started.error().message);
+                const auto arguments = !result->helperArguments.isEmpty() ? result->helperArguments :
+                    result->plan.isEmpty() ? QStringList{} : QStringList{QStringLiteral("--plan"), result->plan};
+                auto started = rutool::platform::launchHidden(result->helper, arguments,
+                    result->plan.isEmpty() ? QFileInfo(result->helper).absolutePath() : QCoreApplication::applicationDirPath());
+                if (!started) {
+                    operationStatus_ = result->plan.isEmpty() ?
+                        QStringLiteral("Не удалось запустить обновление. Запустите файл вручную: %1").arg(result->helper) : started.error().message;
+                    logError(QStringLiteral("Updater"), QStringLiteral("START"), started.error().message);
+                }
                 else { QCoreApplication::quit(); return; }
             }
             if (result->session) {
@@ -112,8 +119,26 @@ void ClientController::initializeOperationsConnections() {
     connect(&cooldownTimer_, &QTimer::timeout, this, [this] { emit changed(); });
     connect(&updateWatcher_, &QFutureWatcherBase::finished, this, [this] {
         const auto result = updateWatcher_.result();
-        if (result) { applicationRelease_ = result->release; applicationEnvelope_ = result->envelope; }
-        else logError(QStringLiteral("ApplicationUpdate"), QStringLiteral("CHECK"), result.error().message);
+        if (result) {
+            applicationRelease_ = result->release; applicationEnvelope_ = result->envelope;
+            linuxApplicationRelease_ = result->linuxRelease;
+            if (!result->channelId.isEmpty()) {
+                auto sequences = operationalSettings_.value(QStringLiteral("LinuxUpdateSequences")).toObject();
+                sequences[result->channelId] = result->channelSequence;
+                operationalSettings_[QStringLiteral("LinuxUpdateSequences")] = sequences; saveOperations();
+                if (!busy_) operationStatus_ = result->linuxRelease ?
+                    QStringLiteral("Доступно обновление RuTool %1.").arg(result->linuxRelease->version) : QStringLiteral("Обновлений RuTool нет.");
+            }
+            const int hop = QCoreApplication::instance()->property("rutoolUpdateHop").toInt();
+            if (linuxApplicationRelease_ && hop > 0) {
+                if (hop < 8) QTimer::singleShot(0, this, &ClientController::runApplicationUpdate);
+                else operationStatus_ = QStringLiteral("Цепочка обновлений слишком длинная. Повторите проверку после обычного запуска.");
+            }
+        }
+        else {
+            if (!busy_) operationStatus_ = result.error().message;
+            logError(QStringLiteral("ApplicationUpdate"), QStringLiteral("CHECK"), result.error().message);
+        }
         emit changed();
     });
 }

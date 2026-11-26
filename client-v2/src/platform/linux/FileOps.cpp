@@ -1,6 +1,7 @@
 #include "Posix.hpp"
 #include <QDateTime>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QStorageInfo>
 #include <QMap>
 #include <limits>
@@ -78,21 +79,28 @@ Result<void> requireFreeSpace(const std::vector<std::pair<QString, quint64>>& wr
     }
     return {};
 }
-Result<void> replaceFile(const QString& staged, const QString& target) {
+ReplacementResult replaceFile(const QString& staged, const QString& target) {
+    const auto unchanged = [](Error error) -> ReplacementResult {
+        return std::unexpected(ReplacementError{ReplacementState::NotReplaced, std::move(error)});
+    };
     auto source = posix::file(staged, O_RDONLY), destination = posix::file(target, O_RDONLY);
-    if (!source) return std::unexpected(source.error());
-    if (!destination) return std::unexpected(destination.error());
+    if (!source) return unchanged(source.error());
+    if (!destination) return unchanged(destination.error());
     auto from = posix::directory(QFileInfo(staged).absolutePath()), to = posix::directory(QFileInfo(target).absolutePath());
-    if (!from) return std::unexpected(from.error());
-    if (!to) return std::unexpected(to.error());
+    if (!from) return unchanged(from.error());
+    if (!to) return unchanged(to.error());
     const auto a = QFile::encodeName(QFileInfo(staged).fileName()), b = QFile::encodeName(QFileInfo(target).fileName());
     struct stat original{};
     if (::fstat(destination->value, &original) != 0 || ::fchmod(source->value, original.st_mode & 0777) != 0)
-        return std::unexpected(posix::io(QStringLiteral("Не удалось сохранить права файла игры.")));
-    if (::fsync(source->value) != 0 || ::renameat(from->value, a.constData(), to->value, b.constData()) != 0)
-        return std::unexpected(posix::io(QStringLiteral("Не удалось атомарно заменить файл игры.")));
+        return unchanged(posix::io(QStringLiteral("Не удалось сохранить права файла игры.")));
+    if (::fsync(source->value) != 0)
+        return unchanged(posix::io(QStringLiteral("Не удалось записать подготовленный файл на диск.")));
+    if (::renameat(from->value, a.constData(), to->value, b.constData()) != 0)
+        return std::unexpected(ReplacementError{ReplacementState::Unknown,
+            posix::io(QStringLiteral("Не удалось атомарно заменить файл игры; требуется проверка состояния."))});
     if (::fsync(to->value) != 0 || ::fsync(from->value) != 0)
-        return std::unexpected(posix::io(QStringLiteral("Не удалось сохранить замену на диск; требуется восстановление.")));
+        return std::unexpected(ReplacementError{ReplacementState::Replaced,
+            posix::io(QStringLiteral("Не удалось сохранить замену на диск; требуется восстановление."))});
     return {};
 }
 Result<qint64> currentProcessStartedTicks() {
@@ -105,8 +113,14 @@ Result<qint64> currentProcessStartedTicks() {
     return ticks; // Linux boot-relative clock ticks; Windows update protocol is disabled.
 }
 Result<qint64> launchHidden(const QString& program, const QStringList& arguments, const QString& workingDirectory) {
+    auto environment = QProcessEnvironment::systemEnvironment();
+    for (const auto* name : {"APPIMAGE", "APPDIR", "ARGV0", "OWD", "LD_LIBRARY_PATH", "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH", "QT_QUICK_CONTROLS_CONF"})
+        environment.remove(QString::fromLatin1(name));
+    environment.insert(QStringLiteral("APPIMAGE_EXTRACT_AND_RUN"), QStringLiteral("1"));
+    QProcess process; process.setProgram(program); process.setArguments(arguments);
+    process.setWorkingDirectory(workingDirectory); process.setProcessEnvironment(environment);
     qint64 pid{};
-    if (!QProcess::startDetached(program, arguments, workingDirectory, &pid))
+    if (!process.startDetached(&pid))
         return std::unexpected(posix::io(QStringLiteral("Не удалось запустить приложение.")));
     return pid;
 }

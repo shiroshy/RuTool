@@ -55,7 +55,7 @@ for path in root.rglob('*'):
         errors.append(f'Potential secret in AppDir: {path.relative_to(root)}')
     if (path.suffix.lower() in {'.rut', '.zip', '.py', '.pyc', '.o', '.a', '.cmake', '.cpp', '.hpp', '.h', '.debug', '.exe'}
             or path.name in {'CMakeCache.txt', 'build.ninja', 'compile_commands.json'}
-            or any(word in path.name.lower() for word in ['qttest', 'rutool_linux_tests', 'rutool_linux_ui_tests', 'ctest', 'generate_fixtures', 'diagnostics', 'benchmarks'])):
+            or any(word in path.name.lower() for word in ['qttest', 'rutool_core_tests', 'rutool_linux_tests', 'rutool_linux_update_tests', 'rutool_linux_ui_tests', 'ctest', 'generate_fixtures', 'diagnostics', 'benchmarks'])):
         errors.append(f'Development/test file: {relative}')
     with path.open('rb') as f:
         header = f.read(20)
@@ -68,9 +68,9 @@ for path in root.rglob('*'):
     if '/nix/store/' in metadata + interpreter:
         errors.append(f'Nix store dependency: {path.relative_to(root)}')
     versions = subprocess.check_output(['readelf', '--version-info', '-W', str(path)], text=True)
-    if any(tuple(map(int, version.split('.'))) > (2, 39)
+    if any(tuple(map(int, version.split('.'))) > (2, 35)
            for version in re.findall(r'\bGLIBC_(\d+\.\d+(?:\.\d+)?)\b', versions)):
-        errors.append(f'Requires glibc newer than 2.39: {relative}')
+        errors.append(f'Requires glibc newer than 2.35: {relative}')
     sections = subprocess.check_output(['readelf', '-SW', str(path)], text=True)
     if '.debug_info' in sections or '.zdebug_info' in sections:
         errors.append(f'Debug information in release ELF: {path.relative_to(root)}')

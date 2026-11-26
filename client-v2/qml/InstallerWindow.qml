@@ -37,6 +37,11 @@ ApplicationWindow {
         else if (!window.packageChosen) openCatalog()
     }
     FileDialog {
+        id: applicationUpdatePicker; title: "Сохранить обновлённый RuTool"; fileMode: FileDialog.SaveFile
+        nameFilters: ["Приложение RuTool (*.AppImage)"]; defaultSuffix: "AppImage"
+        onAccepted: client.chooseApplicationUpdateDestination(selectedFile)
+    }
+    FileDialog {
         id: logPicker; title: "Сохранить подробный лог ошибки"; fileMode: FileDialog.SaveFile
         nameFilters: ["Диагностический лог (*.txt)"]; defaultSuffix: "txt"
         onAccepted: client.exportLog(selectedFile)
@@ -48,6 +53,10 @@ ApplicationWindow {
     }
     Connections {
         target: client
+        function onApplicationUpdateLocationRequested(suggested) {
+            applicationUpdatePicker.currentFile = suggested
+            applicationUpdatePicker.open()
+        }
         function onConfirmationRequested(token, heading, message) {
             confirmation.token = token; confirmation.heading = heading; confirmation.message = message; confirmation.show()
         }
@@ -287,7 +296,8 @@ ApplicationWindow {
                 LegacyButton {
                     objectName: "linuxUpdateButton"
                     visible: window.linuxBuild
-                    text: "Обновление Linux"; link: true; font.pixelSize: 11
+                    text: client.applicationUpdateVersion ? "Обновить до " + client.applicationUpdateVersion : "Проверить обновления"
+                    link: true; font.pixelSize: 11
                     enabled: !window.working
                     onClicked: client.requestApplicationUpdate()
                 }

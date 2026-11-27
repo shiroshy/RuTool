@@ -37,6 +37,11 @@ ApplicationWindow {
         else if (client.canInstall) client.installTranslation()
         else if (!window.packageChosen) openCatalog()
     }
+    function choosePackage() {
+        window.statusOverride = ""
+        if (linuxBuild) client.choosePackage(window)
+        else packagePicker.open()
+    }
     FileDialog {
         id: applicationUpdatePicker; title: "Сохранить обновлённый RuTool"; fileMode: FileDialog.SaveFile
         nameFilters: ["Приложение RuTool (*.AppImage)"]; defaultSuffix: "AppImage"
@@ -90,7 +95,7 @@ ApplicationWindow {
         loadingScreensAvailable: client.loadingScreensAvailable
         gameReady: client.gameValid
         onLoadingScreensRequested: { translations.close(); client.downloadAndInstallLoadingScreens() }
-        onManualRequested: packagePicker.open()
+        onManualRequested: window.choosePackage()
         onDownloadRequested: function(releaseId) { translations.close(); client.downloadTranslation(releaseId) }
         onCodeRequested: { translations.close(); boostyDialog.show() }
     }
@@ -219,7 +224,7 @@ ApplicationWindow {
                     text: "Ручная установка"
                     enabled: !window.working
                     hint: "Выбрать локальный файл .rut"
-                    onClicked: { settings.close(); packagePicker.open() }
+                    onClicked: { settings.close(); window.choosePackage() }
                 }
                 Item { Layout.fillWidth: true }
                 LegacyButton {
@@ -564,10 +569,10 @@ ApplicationWindow {
                 LegacyButton { objectName: "reportButton"; text: "Сообщить о проблеме"; link: true; font.pixelSize: 13; onClicked: report.show() }
                 Item { Layout.fillWidth: true }
                 LegacyButton { objectName: "faqButton"; text: "FAQ"; link: true; font.pixelSize: 13; onClicked: faq.show() }
-                LegacyButton { text: "На чай"; link: true; font.pixelSize: 13; onClicked: Qt.openUrlExternally("https://boosty.to/shizukax") }
+                LegacyButton { text: "На чай"; link: true; font.pixelSize: 13; onClicked: client.openExternalUrl("https://boosty.to/shizukax") }
                 LegacyButton { objectName: "creditsButton"; text: "Credits"; link: true; font.pixelSize: 13; onClicked: credits.show() }
-                LegacyButton { text: "Telegram ↗"; link: true; font.pixelSize: 13; onClicked: Qt.openUrlExternally("https://t.me/bluearchive_ru") }
-                LegacyButton { text: "Discord ↗"; link: true; font.pixelSize: 13; onClicked: Qt.openUrlExternally("https://discord.gg/yZUcSD7KPe") }
+                LegacyButton { text: "Telegram ↗"; link: true; font.pixelSize: 13; onClicked: client.openExternalUrl("https://t.me/bluearchive_ru") }
+                LegacyButton { text: "Discord ↗"; link: true; font.pixelSize: 13; onClicked: client.openExternalUrl("https://discord.gg/yZUcSD7KPe") }
             }
         }
     }

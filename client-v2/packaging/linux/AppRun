@@ -11,6 +11,17 @@ if [ "${RUTOOL_ORIGINAL_LD_PRELOAD+x}" = x ]; then
     fi
     unset RUTOOL_ORIGINAL_LD_PRELOAD
 fi
+# Preserve the session environment for external desktop applications. Keep the
+# first snapshot when another AppImage starts this one during an update.
+if [ "${RUTOOL_DESKTOP_ENV_SAVED-}" != 1 ]; then
+    for name in LD_LIBRARY_PATH LD_PRELOAD QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH QML_IMPORT_PATH QML2_IMPORT_PATH QT_QUICK_CONTROLS_CONF; do
+        unset "RUTOOL_DESKTOP_$name"
+        if value=$(printenv "$name"); then
+            export "RUTOOL_DESKTOP_$name=$value"
+        fi
+    done
+    export RUTOOL_DESKTOP_ENV_SAVED=1
+fi
 # Keep newer system Mesa/LLVM compatible with the C++ runtime in this process.
 # The probe itself must resolve the host runtime without the bundle's paths.
 if system_cpp=$(LD_LIBRARY_PATH= "$app_dir/usr/libexec/rutool/runtime-check" \

@@ -99,6 +99,32 @@ class RuntimeSelectionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.splitlines(), [original, str(app / 'usr/lib')])
 
+    def test_launcher_saves_desktop_environment_once(self):
+        app = self.fake_app()
+        binary = app / 'usr/bin/RuTool'
+        binary.write_text('#!/bin/sh\n/usr/bin/env\n')
+        env = dict(self.env, LD_LIBRARY_PATH='/session/lib', QT_PLUGIN_PATH='/session/qt',
+                   QML_IMPORT_PATH='', LD_PRELOAD='libm.so.6')
+        env.pop('QT_QUICK_CONTROLS_CONF', None)
+        for key in list(env):
+            if key.startswith('RUTOOL_DESKTOP_'):
+                del env[key]
+        def launch(environment):
+            result = subprocess.run([app / 'AppRun'], env=environment, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return dict(line.split('=', 1) for line in result.stdout.splitlines())
+        saved = launch(env)
+        self.assertEqual(saved['RUTOOL_DESKTOP_ENV_SAVED'], '1')
+        self.assertEqual(saved['RUTOOL_DESKTOP_LD_LIBRARY_PATH'], '/session/lib')
+        self.assertEqual(saved['RUTOOL_DESKTOP_QT_PLUGIN_PATH'], '/session/qt')
+        self.assertEqual(saved['RUTOOL_DESKTOP_LD_PRELOAD'], 'libm.so.6')
+        self.assertEqual(saved['RUTOOL_DESKTOP_QML_IMPORT_PATH'], '')
+        self.assertNotIn('RUTOOL_DESKTOP_QT_QUICK_CONTROLS_CONF', saved)
+        restarted = launch(saved)
+        for key in saved:
+            if key.startswith('RUTOOL_DESKTOP_'):
+                self.assertEqual(restarted[key], saved[key])
+
 
 if __name__ == '__main__':
     unittest.main()

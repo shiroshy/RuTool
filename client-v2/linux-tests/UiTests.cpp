@@ -1,5 +1,9 @@
 #include <QtTest>
 #include <QGuiApplication>
+#include <QApplication>
+#include <QFileDialog>
+#include <QTreeView>
+#include <QFileSystemModel>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
@@ -155,6 +159,62 @@ private slots:
         QVERIFY(check(false));
         QCOMPARE(tagline->property("text").toString(), QStringLiteral("Sensei, I Can't Read"));
     }
+    void manualPackagePicker() {
+        QVERIFY(click("settingsButton"));
+        QVERIFY(click("choosePackage"));
+        auto* picker = client_->packagePicker_.get();
+        QVERIFY(picker);
+        QVERIFY(QTest::qWaitFor([&] { return picker->isVisible(); }, 2000));
+        QCOMPARE(picker->fileMode(), QFileDialog::ExistingFile);
+        QCOMPARE(picker->windowHandle()->transientParent(), window_);
+        const auto original = picker->size();
+        const QSize expanded = original + QSize(300, 160);
+        picker->resize(expanded);
+        QTest::qWait(500);
+        QCOMPARE(picker->size(), expanded);
+        auto* list = picker->findChild<QTreeView*>(QStringLiteral("treeView"));
+        QVERIFY(list);
+        QVERIFY(list->isVisible());
+        const auto wideList = list->width();
+        picker->resize(original);
+        QTest::qWait(100);
+        QVERIFY(list->width() < wideList);
+        picker->resize(expanded);
+        QTest::qWait(100);
+        QCOMPARE(list->width(), wideList);
+        QVERIFY(picker->grab().save(QDir::current().filePath(QStringLiteral("manual-package-picker.png"))));
+        picker->reject();
+        QVERIFY(!picker->isVisible());
+        QVERIFY(click("settingsButton"));
+        QVERIFY(click("choosePackage"));
+        QCOMPARE(client_->packagePicker_.get(), picker);
+        QVERIFY(QTest::qWaitFor([&] { return picker->isVisible(); }, 2000));
+        QCOMPARE(picker->size(), expanded);
+        picker->reject();
+
+        // Both entry points use the same dialog, including after panel motion.
+        auto* catalog = item("translationsWindow"); QVERIFY(catalog);
+        QVERIFY(QMetaObject::invokeMethod(catalog, "show"));
+        QTest::qWait(350);
+        QVERIFY(QMetaObject::invokeMethod(catalog, "manualRequested"));
+        QVERIFY(QTest::qWaitFor([&] { return picker->isVisible(); }, 2000));
+        QFile package(data_.filePath(QStringLiteral("manual.rut")));
+        QVERIFY(package.open(QIODevice::WriteOnly)); package.write("invalid fixture"); package.close();
+        picker->setDirectory(data_.path());
+        auto* files = picker->findChild<QFileSystemModel*>(); QVERIFY(files);
+        QVERIFY(QTest::qWaitFor([&] { return files->index(package.fileName()).isValid(); }, 2000));
+        const auto index = files->index(package.fileName());
+        list->scrollTo(index);
+        QVERIFY(QTest::qWaitFor([&] { return list->visualRect(index).isValid(); }, 2000));
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, list->visualRect(index).center());
+        QCOMPARE(picker->selectedFiles(), QStringList{package.fileName()});
+        QVERIFY(QMetaObject::invokeMethod(picker, "accept"));
+        QVERIFY(QTest::qWaitFor([&] { return client_->packagePath() == package.fileName(); }, 2000));
+        QVERIFY(QTest::qWaitFor([&] { return !client_->busy(); }, 5000));
+        QCOMPARE(client_->packagePath(), package.fileName());
+        QVERIFY(client_->packageError()); // Selection reaches the real package inspector.
+        QVERIFY(QMetaObject::invokeMethod(catalog, "close"));
+    }
     void catalogAndAddon() {
         auto* catalog = item("translationsWindow"); QVERIFY(catalog);
         QVERIFY(catalog->setProperty("loadingScreensAvailable", true));
@@ -208,7 +268,7 @@ int main(int argc, char** argv) {
     QTemporaryDir isolated;
     if (!isolated.isValid()) return 2;
     for (const auto* name : {"XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"}) qputenv(name, isolated.path().toUtf8());
-    QGuiApplication app(argc, argv);
+    QApplication app(argc, argv);
     app.setProperty("rutoolSmokeTest", true);
     QQuickStyle::setStyle(QStringLiteral("Basic"));
     UiTests tests;

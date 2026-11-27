@@ -3,6 +3,9 @@
 #include "Startup.hpp"
 #include <QDir>
 #include <QGuiApplication>
+#ifdef Q_OS_LINUX
+#include <QApplication>
+#endif
 #include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -21,7 +24,11 @@ extern "C" __declspec(dllexport) int rutoolMain(int argc, char* argv[]) {
 int main(int argc, char* argv[]) {
 #endif
     const auto startup = rutool::platform::prepareStartup();
+#ifdef Q_OS_LINUX
+    QApplication app(argc, argv);
+#else
     QGuiApplication app(argc, argv);
+#endif
     app.setProperty("rutoolAppImageHash", startup.appImageHash);
     QCoreApplication::setApplicationName(startup.applicationName);
     QCoreApplication::setOrganizationName(QStringLiteral("RuTool"));

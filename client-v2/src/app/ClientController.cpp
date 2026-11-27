@@ -1,6 +1,11 @@
 #include <rutool/platform/Runtime.hpp>
 #include "ClientController.hpp"
 #include "CacheCleanup.hpp"
+#include "ExternalLinks.hpp"
+#ifdef Q_OS_LINUX
+#include <QFileDialog>
+#include <QWindow>
+#endif
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
@@ -13,6 +18,12 @@
 #include <rutool/network/ClientContent.hpp>
 
 ClientController::ClientController(QObject* parent) : QObject(parent), services_(rutool::updatePublicKey(), this) {
+    auto* links = new ExternalLinks(this);
+    connect(links, &ExternalLinks::failed, this, [this](const QString& detail) {
+        logError(QStringLiteral("ExternalLink"), QStringLiteral("OPEN"), QStringLiteral("Не удалось открыть ссылку"), detail);
+        operationStatus_ = QStringLiteral("Не удалось открыть ссылку. Подробности — в логе.");
+        emit changed();
+    });
     initializeOperationsConnections();
     initializePremiumConnections();
     credits_ = rutool::defaultCredits();
@@ -68,6 +79,34 @@ ClientController::ClientController(QObject* parent) : QObject(parent), services_
         emit reportAttachmentsChecked(attachmentUrls_, error.isEmpty(), error);
     });
 }
+void ClientController::openExternalUrl(const QUrl& url) {
+    if (auto* links = findChild<ExternalLinks*>()) links->open(url);
+}
+#ifdef Q_OS_LINUX
+void ClientController::choosePackage(QObject* parentWindow) {
+    if (busy_) return;
+    auto* parent = qobject_cast<QWindow*>(parentWindow);
+    if (!parent) return;
+    // Use the native dialog when available, otherwise Qt Widgets, avoiding
+    // the resize issues reported with Qt Quick's fallback window on Linux.
+    auto* picker = packagePicker_.get();
+    if (!picker) {
+        packagePicker_ = std::make_unique<QFileDialog>();
+        picker = packagePicker_.get();
+        picker->setObjectName(QStringLiteral("packageFileDialog"));
+        picker->setWindowTitle(QStringLiteral("Выберите файл .rut"));
+        picker->setFileMode(QFileDialog::ExistingFile);
+        picker->setNameFilter(QStringLiteral("Пакет RuTool (*.rut)"));
+        connect(picker, &QFileDialog::fileSelected, this, [this](const QString& path) {
+            inspectPackage(QUrl::fromLocalFile(path));
+        });
+        picker->winId();
+        picker->windowHandle()->setTransientParent(parent);
+    }
+    if (picker->isVisible()) { picker->raise(); picker->activateWindow(); return; }
+    picker->open();
+}
+#endif
 ClientController::~ClientController() {
     lifetime_->store(true); if (cancel_) cancel_->store(true); services_.cancel(); cooldownTimer_.stop(); premiumTimer_.stop();
     watcher_.waitForFinished(); exportWatcher_.waitForFinished(); attachmentWatcher_.waitForFinished(); workWatcher_.waitForFinished();

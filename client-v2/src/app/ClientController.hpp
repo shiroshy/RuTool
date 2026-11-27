@@ -14,6 +14,9 @@
 #include <QVariantMap>
 #include <QSet>
 #include <rutool/platform/FileOps.hpp>
+#ifdef Q_OS_LINUX
+class QFileDialog;
+#endif
 
 class ClientController final : public QObject {
     Q_OBJECT
@@ -86,6 +89,10 @@ public:
     bool checkingAttachments() const { return attachmentWatcher_.isRunning(); }
     void recordRuntimeError(const QString& detail);
     Q_INVOKABLE void chooseGameFolder(const QUrl& url);
+    Q_INVOKABLE void openExternalUrl(const QUrl& url);
+#ifdef Q_OS_LINUX
+    Q_INVOKABLE void choosePackage(QObject* parentWindow);
+#endif
     Q_INVOKABLE void refreshServices();
     Q_INVOKABLE void refreshContent();
     const QString& faqText() const { return faqText_; }
@@ -140,6 +147,9 @@ signals:
     void reportSent(bool accepted, const QString& message);
     void applicationUpdateLocationRequested(const QUrl& suggested);
 private:
+#ifdef Q_OS_LINUX
+    std::unique_ptr<QFileDialog> packagePicker_;
+#endif
     friend class ControllerTests;
     friend class UiTests;
     enum class PackagePhase { Idle, Downloading, Checking };

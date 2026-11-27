@@ -14,6 +14,11 @@ install(FILES packaging/linux/rutool.desktop DESTINATION share/applications)
 install(FILES packaging/linux/rutool.svg DESTINATION share/icons/hicolor/scalable/apps)
 if(BUILD_TESTING)
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    qt_add_executable(rutool_external_links_tests linux-tests/ExternalLinksTests.cpp)
+    target_link_libraries(rutool_external_links_tests PRIVATE Qt6::Test rutool_ui_support)
+    rutool_quality(rutool_external_links_tests)
+    add_test(NAME linux_external_links COMMAND rutool_external_links_tests)
+    set_tests_properties(linux_external_links PROPERTIES TIMEOUT 15)
     add_test(NAME linux_runtime_selection COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/linux-tests/RuntimeSelectionTests.py"
         "$<TARGET_FILE:rutool_runtime_check>" "${CMAKE_CURRENT_SOURCE_DIR}/packaging/linux/AppRun" "${CMAKE_C_COMPILER}")
